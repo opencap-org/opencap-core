@@ -254,10 +254,17 @@ def downloadVideosFromServer(session_id,trial_id, isDocker=True,
                 session_desc = getMetadataFromServer(session_id)      
                 
             # Load iPhone models.
-            phoneModel= []
-            for i,video in enumerate(trial["videos"]):    
-                phoneModel.append(video['parameters']['model'])
-            session_desc['iphoneModel'] = {'Cam' + str(i) : phoneModel[i] for i in range(len(phoneModel))}
+            iphoneModel = {}
+            for video in trial["videos"]:
+                device_id = video.get("device_id", "").replace('-', '').upper()
+                if device_id not in mappingCamDevice:
+                    raise ValueError(f"Unknown device_id: {device_id}")
+                k = mappingCamDevice[device_id]
+                model = None
+                if isinstance(video.get("parameters"), dict):
+                    model = video["parameters"].get("model")
+                iphoneModel[f"Cam{k}"] = model
+            session_desc['iphoneModel'] = iphoneModel
         
             # Save metadata.
             with open(sessionYamlPath, 'w') as file:
