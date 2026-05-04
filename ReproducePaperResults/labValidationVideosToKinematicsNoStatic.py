@@ -30,7 +30,7 @@ from utils import importMetadata
 #   C:/Users/opencap/Documents/LabValidation_withVideos/subject2
 #   C:/Users/opencap/Documents/LabValidation_withVideos/subject3
 #   ...
-subject_numbers = [10]
+subject_numbers = [11]
 sessionNames = [f'subject{num}' for num in subject_numbers] #['subject2']#,'subject4', 'subject7', 'subject8', 'subject9', 'subject10', 'subject11', 'subject13', 'subject14']
 
 # %% Excel Progress Tracking Setup
@@ -104,7 +104,7 @@ def extract_subject_id_from_session(session_name):
         pass
     return None
 
-dataDir = os.path.normpath('G:\Shared drives\Stanford Football\February_23')
+dataDir = os.path.normpath('G:\Shared drives\Stanford Football\March_2')
 
 # The dataset includes 2 sessions per subject.The first session includes
 # static, sit-to-stand, squat, and drop jump trials. The second session 

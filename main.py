@@ -43,15 +43,16 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
          dataDir=None, overwriteAugmenterModel=False,
          filter_frequency='default', overwriteFilterFrequency=False,
          scaling_setup='upright_standing_pose', overwriteScalingSetup=False,
-         overwriteCamerasToUse=False, syncVer=None,):
+         overwriteCamerasToUse=False, syncVer=None,
+         runSynchronization=True, runMedianFilter=True,):
 
     # %% High-level settings.
     # Camera calibration.
     runCameraCalibration = True
     # Pose detection.
     runPoseDetection = True
-    # Video Synchronization.
-    runSynchronization = True # Changed this from True
+    # Video Synchronization (can be disabled via runSynchronization parameter).
+    runSynchronization = runSynchronization
     # Triangulation.
     runTriangulation = True
     # Marker augmentation.
@@ -458,7 +459,8 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
                 spline3dZeros = True, splineMaxFrames=int(frameRate/5), 
                 nansInOut=nansInOut,CameraDirectories=cameraDirectories,
                 trialName=trialName,startEndFrames=startEndFrames,trialID=trial_id,
-                outputMediaFolder=outputMediaFolder)
+                outputMediaFolder=outputMediaFolder,
+                videoFolderSuffix=poseDetector + '_' + resolutionPoseDetection)
         except Exception as e:
             if len(e.args) == 2: # specific exception
                 raise Exception(e.args[0], e.args[1])
@@ -481,7 +483,7 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
     from utilsMedian import median_filter_trc_file  # Assuming this function exists in UtilsMedian.py
 
     # Apply median filter only if the TRC file exists (e.g., triangulation ran)
-    if runTriangulation and os.path.exists(pathOutputFiles[trialName]):
+    if runMedianFilter and runTriangulation and os.path.exists(pathOutputFiles[trialName]):
         pathMedianFilteredTRC = pathOutputFiles[trialName].replace('.trc', '_median_filtered.trc')
         median_filter_trc_file(pathOutputFiles[trialName], pathMedianFilteredTRC, window=7)  # Adjust window as needed
         # Update pathOutputFiles to use the filtered file for augmentation
@@ -530,8 +532,9 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
             vertical_offset_settings = float(np.copy(vertical_offset)-0.01)
             vertical_offset = 0.01   
         
-        # %% Filter augmented markers with 15 Hz Butterworth low-pass filter.
-        if runMarkerAugmentation:
+        # %% Filter augmented markers with 15 Hz Butterworth low-pass filter. Gated behind Median Filter T/F
+        if runMedianFilter and runMarkerAugmentation:
+            import utilsDataman
             import scipy.signal
             def butter_lowpass_filter(data, cutoff, fs, order=4):
                 nyq = 0.5 * fs
@@ -664,14 +667,20 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
                 # using the filter_post_aug.py python script
                 ##  pathTRCFile4IK = pathAugmentedOutputFiles[trialName] 
 
-                # Use the post-augmented marker file filtered with 15Hz Butterworth.
-                pathTRCFile4IK = pathAugmentedOutputFiles[trialName].replace('.trc', '_filt15Hz.trc')
+                # Use the post-augmented marker file filtered with 15Hz Butterworth when
+                # runMedianFilter is enabled; otherwise use the unfiltered augmented file.
+                if runMedianFilter:
+                    pathTRCFile4IK = pathAugmentedOutputFiles[trialName].replace('.trc', '_filt15Hz.trc')
+                    IKFileName = trial_id + '_filt15Hz'
+                else:
+                    pathTRCFile4IK = pathAugmentedOutputFiles[trialName]
+                    IKFileName = trial_id
                 # Run IK tool. 
                 logging.info('Running Inverse Kinematics')
                 try:
                     pathOutputIK, pathModelIK = runIKTool(
                         pathGenericSetupFile4IK, pathScaledModel, 
-                        pathTRCFile4IK, outputIKDir, IKFileName=trial_id + '_filt15Hz')
+                        pathTRCFile4IK, outputIKDir, IKFileName=IKFileName)
                 except Exception as e:
                     if len(e.args) == 2: # specific exception
                         raise Exception(e.args[0], e.args[1])

@@ -1317,7 +1317,7 @@ def triangulateMultiviewVideo(CameraParamDict,keypointDict,imageScaleFactor=1,
                               spline3dZeros = False, splineMaxFrames=5, nansInOut=[],
                               CameraDirectories = None, trialName = None,
                               startEndFrames=None, trialID='',
-                              outputMediaFolder=None):
+                              outputMediaFolder=None, videoFolderSuffix=None):
     # cams2Use is a list of cameras that you want to use in triangulation. 
     # if first entry of list is ['all'], will use all
     # otherwise, ['Cam0','Cam2']
@@ -1407,13 +1407,10 @@ def triangulateMultiviewVideo(CameraParamDict,keypointDict,imageScaleFactor=1,
     # Rewrite videos based on sync time and trimmed trc.
     if CameraDirectories != None and trialName !=None:       
         print('Writing synchronized videos')
+        _visBase = ('VisualizerVideos_' + videoFolderSuffix) if videoFolderSuffix else 'VisualizerVideos'
         outputVideoDir = os.path.abspath(os.path.join(
-                        list(CameraDirectories.values())[0],'../../','VisualizerVideos',trialName))
-        # Check if the directory already exists
-        if os.path.exists(outputVideoDir):
-            # If it exists, delete it and its contents
-            shutil.rmtree(outputVideoDir)
-        os.makedirs(outputVideoDir,exist_ok=True)
+                        list(CameraDirectories.values())[0],'../../', _visBase, trialName))
+        os.makedirs(outputVideoDir, exist_ok=True)
         for iCam,camName in enumerate(keypointDict):
                         
             nFramesToWrite = endInd-startInd
