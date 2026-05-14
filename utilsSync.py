@@ -1051,6 +1051,7 @@ def detectHandPunchAllVideos(syncVer, **kwargs):
         ValueError: If the sync version is not supported.
     """
     if syncVer == '1.0':
+        print("Using synchronization algorithm v1.0")
         handPunchVertPositionList = kwargs.get('clippedHandPunchVertPositionList', None)
         sampleFreq = kwargs.get('sampleFreq', None)
 
@@ -1060,6 +1061,7 @@ def detectHandPunchAllVideos(syncVer, **kwargs):
         return isTrialPunch, hand, None
     
     elif syncVer == '1.1':
+        print("Using synchronization algorithm v1.1")
         handPunchVertPositionList = kwargs.get('inHandPunchVertPositionList', None)
         confList = kwargs.get('inHandPunchConfidenceList', None)
         sampleFreq = kwargs.get('sampleFreq', None)
@@ -1342,6 +1344,7 @@ def syncHandPunch(syncVer, **kwargs):
         ValueError: If the sync version is not supported.
     """
     if syncVer == '1.0':
+        print("Using synchronization algorithm v1.0")
         positions = kwargs.get('clippedHandPunchVertPositionList', None)
         hand = kwargs.get('handForPunch', None)
         maxShiftSteps = kwargs.get('maxShiftSteps', 600)
@@ -1350,6 +1353,7 @@ def syncHandPunch(syncVer, **kwargs):
                                 hand,
                                 maxShiftSteps=maxShiftSteps)
     elif syncVer == '1.1':
+        print("Using synchronization algorithm v1.1")
         positionsList = kwargs.get('inHandPunchVertPositionList', None)
         hand = kwargs.get('handForPunch', None)
         confList = kwargs.get('inHandPunchConfidenceList', None)

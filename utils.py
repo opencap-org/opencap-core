@@ -408,6 +408,10 @@ def getMetadataFromServer(session_id,justCheckerParams=False):
                         session_desc["scalingsetup"] = session['meta']['settings']['scalingsetup']
                     except:
                         session_desc["scalingsetup"] = 'upright_standing_pose'
+                try:
+                    session_desc["sync_ver"] = session['meta']['settings']['sync_ver']
+                except:
+                    session_desc["sync_ver"] = '1.1'
             else:                
                 subject_info = getSubjectJson(session['subject'])                
                 session_desc["subjectID"] = subject_info['name']
@@ -436,6 +440,10 @@ def getMetadataFromServer(session_id,justCheckerParams=False):
                     session_desc["scalingsetup"] = session['meta']['settings']['scalingsetup']
                 except:
                     session_desc["scalingsetup"] = 'upright_standing_pose'
+                try:
+                    session_desc["sync_ver"] = session['meta']['settings']['sync_ver']
+                except:
+                    session_desc["sync_ver"] = '1.1'
 
         if 'sessionWithCalibration' in session['meta'] and 'checkerboard' not in session['meta']:
             newSessionId = session['meta']['sessionWithCalibration']['id']
