@@ -11,6 +11,7 @@ v1.1
 
 Previous Changes
 ================
+- 05/22/2026: Added support for iPhone 17e and iPad Air (A4) ([pull request](https://github.com/opencap-org/opencap-core/pull/276))
 - 07/03/2024: Speed up IK by removing patella constraints from model ([pull request](https://github.com/stanfordnmbl/opencap-core/pull/174))
 - 06/25/2024: Add support for "any pose" scaling ([pull request](https://github.com/stanfordnmbl/opencap-core/pull/168))
 - 05/10/2024: Add reprojection error minimization to improve camera synchronization  ([pull request](https://github.com/stanfordnmbl/opencap-core/pull/159))
