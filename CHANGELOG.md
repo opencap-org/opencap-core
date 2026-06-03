@@ -4,6 +4,7 @@ This is not a comprehensive list of changes but rather a hand-curated collection
 
 v1.1
 =====
+- Added support for iPhone 17e and iPad Air (A4) (PR #276)
 - Improved synchronization with an arm raise (hand punch). (#182)
 - Added option for downloading pose pickle files. (#248)
 - Moved synchronization specific files to new module utilsSync.py. (PR #259)
