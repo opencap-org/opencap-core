@@ -3,10 +3,15 @@ import glob
 import shutil
 import requests
 import json
+import logging
+import time
+import random
+import urllib
 
 from main import main
 from utils import getDataDirectory
 from utils import getTrialName
+from utils import getTrialJson
 from utils import downloadVideosFromServer
 from utils import switchCalibrationForCamera
 from utils import deleteCalibrationFiles
@@ -18,7 +23,12 @@ from utils import getModelAndMetadata
 from utils import writeCalibrationOptionsToAPI
 from utils import postMotionData
 from utils import getNeutralTrialID
-from utils import  getCalibrationTrialID
+from utils import getCalibrationTrialID
+from utils import sendStatusEmail
+from utils import importMetadata
+from utils import checkAndGetPosePickles
+from utils import getTrialNameIdMapping
+from utils import makeRequestWithRetry
 from utilsAuth import getToken
 from utilsAPI import getAPIURL
 
@@ -28,16 +38,20 @@ API_TOKEN = getToken()
 
 def processTrial(session_id, trial_id, trial_type = 'dynamic',
                  imageUpsampleFactor = 4, poseDetector = 'OpenPose',
-                 isDocker = True, resolutionPoseDetection='default',
-                 extrinsicTrialName = 'calibration',
+                 isDocker = True, resolutionPoseDetection = 'default',
+                 bbox_thr = 0.8, extrinsicTrialName = 'calibration',
                  deleteLocalFolder = True,
-                 hasWritePermissions=True):
+                 hasWritePermissions = True,
+                 use_existing_pose_pickle = False,
+                 batchProcess = False,
+                 cameras_to_use=['all']):
 
     # Get session directory
     session_name = session_id 
     data_dir = getDataDirectory(isDocker=isDocker)
     session_path = os.path.join(data_dir,'Data',session_name)    
     trial_url = "{}{}{}/".format(API_URL, "trials/", trial_id)
+    metadata_path = os.path.join(session_path, 'sessionMetadata.yaml')        
        
     # Process the 3 different types of trials
     if trial_type == 'calibration':
@@ -52,14 +66,16 @@ def processTrial(session_id, trial_id, trial_type = 'dynamic',
         try:
             main(session_name, trial_name, trial_id, isDocker=isDocker, extrinsicsTrial=True,
                  imageUpsampleFactor=imageUpsampleFactor,genericFolderNames = True,
-                 poseDetector=poseDetector)
+                 cameras_to_use=cameras_to_use)
         except Exception as e:
             error_msg = {}
             error_msg['error_msg'] = e.args[0]
             error_msg['error_msg_dev'] = e.args[1]
-            _ = requests.patch(trial_url, data={"meta": json.dumps(error_msg)},
-                   headers = {"Authorization": "Token {}".format(API_TOKEN)})   
-            raise Exception('Calibration failed')
+            _ = makeRequestWithRetry('PATCH',
+                                     trial_url,
+                                     data={"meta": json.dumps(error_msg)},
+                                     headers = {"Authorization": "Token {}".format(API_TOKEN)}) 
+            raise Exception('Calibration failed', e.args[0], e.args[1])
         
         if not hasWritePermissions:
             print('You are not the owner of this session, so do not have permission to write results to database.')
@@ -72,19 +88,38 @@ def processTrial(session_id, trial_id, trial_type = 'dynamic',
         # Write calibration solutions to django
         writeCalibrationOptionsToAPI(session_path,session_id,calibration_id = trial_id,
                                      trialName = extrinsicTrialName)
-        return
         
     elif trial_type == 'static':
         # delete static files if they exist.
         deleteStaticFiles(session_path, staticTrialName = 'neutral')
         
         # Check for calibration to use on django, if not, check for switch calibrations and post result.
-        calibrationOptions = getCalibration(session_id,session_path,trial_type=trial_type,getCalibrationOptions=True)   
+        calibrationOptions = getCalibration(session_id,session_path,trial_type=trial_type,getCalibrationOptions=True)
         
         # download the videos
         trial_name = downloadVideosFromServer(session_id,trial_id,isDocker=isDocker,
                                  isCalibration=False,isStaticPose=True)
         
+        # Download the pose pickles to avoid re-running pose estimation.
+        if batchProcess and use_existing_pose_pickle:
+            checkAndGetPosePickles(trial_id, session_path, poseDetector, resolutionPoseDetection, bbox_thr)
+
+        # If processTrial is run from app.py, poseDetector is set based on what
+        # users select in the webapp, which is saved in metadata. Based on this,
+        # we set resolutionPoseDetection or bbox_thr to the webapp defaults. If
+        # processTrial is run from batchReprocess.py, then the settings used are
+        # those passed as arguments to processTrial.
+        if not batchProcess:
+            sessionMetadata = importMetadata(metadata_path)
+            poseDetector = sessionMetadata['posemodel']
+            file_dir = os.path.dirname(os.path.abspath(__file__))
+            with open(os.path.join(file_dir,'defaultOpenCapSettings.json')) as f:
+                defaultOpenCapSettings = json.load(f)
+            if poseDetector.lower() == 'openpose':
+                resolutionPoseDetection = defaultOpenCapSettings['openpose']
+            elif poseDetector.lower() == 'hrnet':
+                bbox_thr = defaultOpenCapSettings['hrnet']            
+
         # run static
         try:
             main(session_name, trial_name, trial_id, isDocker=isDocker, extrinsicsTrial=False,
@@ -93,14 +128,32 @@ def processTrial(session_id, trial_id, trial_type = 'dynamic',
                  scaleModel = True,
                  resolutionPoseDetection = resolutionPoseDetection,
                  genericFolderNames = True,
-                 calibrationOptions = calibrationOptions)
-        except Exception as e:            
+                 bbox_thr = bbox_thr,
+                 calibrationOptions = calibrationOptions,
+                 cameras_to_use=cameras_to_use)
+        except Exception as e:       
+            # Try to post pose pickles so can be used offline. This function will 
+            # error at kinematics most likely, but if pose estimation completed,
+            # pickles will get posted
+            try:
+                # Write results to django
+                if not batchProcess:
+                    print('trial failed. posting pose pickles')
+                    postMotionData(trial_id,session_path,trial_name=trial_name,isNeutral=True,
+                                    poseDetector=poseDetector, 
+                                    resolutionPoseDetection=resolutionPoseDetection,
+                                    bbox_thr=bbox_thr)
+            except:
+                pass
+            
             error_msg = {}
             error_msg['error_msg'] = e.args[0]
             error_msg['error_msg_dev'] = e.args[1]
-            _ = requests.patch(trial_url, data={"meta": json.dumps(error_msg)},
-                   headers = {"Authorization": "Token {}".format(API_TOKEN)})
-            raise Exception('Static trial failed')
+            _ = makeRequestWithRetry('PATCH',
+                                     trial_url,
+                                     data={"meta": json.dumps(error_msg)},
+                                     headers = {"Authorization": "Token {}".format(API_TOKEN)})
+            raise Exception('Static trial failed', e.args[0], e.args[1])
         
         if not hasWritePermissions:
             print('You are not the owner of this session, so do not have permission to write results to database.')
@@ -123,7 +176,10 @@ def processTrial(session_id, trial_id, trial_type = 'dynamic',
                         tag="visualizerTransforms-json",deleteOldMedia=True)
         
         # Write results to django
-        postMotionData(trial_id,session_path,trial_name=trial_name,isNeutral=True)
+        postMotionData(trial_id,session_path,trial_name=trial_name,isNeutral=True,
+                       poseDetector=poseDetector, 
+                       resolutionPoseDetection=resolutionPoseDetection,
+                       bbox_thr=bbox_thr)
         
         # Write calibration options to django
         postCalibrationOptions(session_path,session_id,overwrite=True)
@@ -138,20 +194,58 @@ def processTrial(session_id, trial_id, trial_type = 'dynamic',
             session_id, trial_id, isDocker=isDocker, isCalibration=False,
             isStaticPose=False)
         
+        # Download the pose pickles to avoid re-running pose estimation.
+        if batchProcess and use_existing_pose_pickle:
+            checkAndGetPosePickles(trial_id, session_path, poseDetector, resolutionPoseDetection, bbox_thr)
+
+        # If processTrial is run from app.py, poseDetector is set based on what
+        # users select in the webapp, which is saved in metadata. Based on this,
+        # we set resolutionPoseDetection or bbox_thr to the webapp defaults. If
+        # processTrial is run from batchReprocess.py, then the settings used are
+        # those passed as arguments to processTrial.
+        if not batchProcess:
+            sessionMetadata = importMetadata(metadata_path)
+            poseDetector = sessionMetadata['posemodel']
+            file_dir = os.path.dirname(os.path.abspath(__file__))
+            with open(os.path.join(file_dir,'defaultOpenCapSettings.json')) as f:
+                defaultOpenCapSettings = json.load(f)
+            if poseDetector.lower() == 'openpose':
+                resolutionPoseDetection = defaultOpenCapSettings['openpose']
+            elif poseDetector.lower() == 'hrnet':
+                bbox_thr = defaultOpenCapSettings['hrnet'] 
+        
         # run dynamic
         try:
             main(session_name, trial_name, trial_id, isDocker=isDocker, extrinsicsTrial=False,
                  poseDetector=poseDetector,
                  imageUpsampleFactor=imageUpsampleFactor,
                  resolutionPoseDetection = resolutionPoseDetection,
-                 genericFolderNames = True)
+                 genericFolderNames = True,
+                 bbox_thr = bbox_thr,
+                 cameras_to_use=cameras_to_use)
         except Exception as e:
+            # Try to post pose pickles so can be used offline. This function will 
+            # error at kinematics most likely, but if pose estimation completed,
+            # pickles will get posted
+            try:
+                # Write results to django
+                if not batchProcess:
+                    print('trial failed. posting pose pickles')
+                    postMotionData(trial_id,session_path,trial_name=trial_name,isNeutral=False,
+                                    poseDetector=poseDetector, 
+                                    resolutionPoseDetection=resolutionPoseDetection,
+                                    bbox_thr=bbox_thr)
+            except:
+                pass
+            
             error_msg = {}
             error_msg['error_msg'] = e.args[0]
             error_msg['error_msg_dev'] = e.args[1]
-            _ = requests.patch(trial_url, data={"meta": json.dumps(error_msg)},
-                   headers = {"Authorization": "Token {}".format(API_TOKEN)})   
-            raise Exception('Dynamic trial failed.\n' + error_msg['error_msg_dev'])
+            _ = makeRequestWithRetry('PATCH',
+                                     trial_url,
+                                     data={"meta": json.dumps(error_msg)},
+                                     headers = {"Authorization": "Token {}".format(API_TOKEN)})
+            raise Exception('Dynamic trial failed.\n' + error_msg['error_msg_dev'], e.args[0], e.args[1])
         
         if not hasWritePermissions:
             print('You are not the owner of this session, so do not have permission to write results to database.')
@@ -170,16 +264,18 @@ def processTrial(session_id, trial_id, trial_type = 'dynamic',
                         tag="visualizerTransforms-json",deleteOldMedia=True)
         
         # Write results to django
-        postMotionData(trial_id,session_path,trial_name=trial_name,isNeutral=False)
+        postMotionData(trial_id,session_path,trial_name=trial_name,isNeutral=False,
+                       poseDetector=poseDetector, 
+                       resolutionPoseDetection=resolutionPoseDetection,
+                       bbox_thr=bbox_thr)
         
     else:
-        raise Exception('Wrong trial type. Options: calibration, static, dynamic.')
-        
+        raise Exception('Wrong trial type. Options: calibration, static, dynamic.', 'TODO', 'TODO')
+    
     # Remove data
-
     if deleteLocalFolder:
         shutil.rmtree(session_path)
-      
+        
         
 def getCalibrationImagePath(session_id,isDocker=True):
     session_name = session_id # TODO We may want to name this on server side?
@@ -246,10 +342,18 @@ def newSessionSameSetup(session_id_old,session_id_new,extrinsicTrialName='calibr
                      os.path.join(session_path_new,'sessionMetadata.yaml'))
             
     
-def batchReprocess(session_ids,calib_id,static_id,dynamic_ids,poseDetector='OpenPose', 
-                   resolutionPoseDetection='default',deleteLocalFolder=True,
-                   isServer=False):
+def batchReprocess(session_ids,calib_id,static_id,dynamic_trialNames,poseDetector='OpenPose', 
+                   resolutionPoseDetection='1x736',deleteLocalFolder=True,
+                   isServer=False, use_existing_pose_pickle=True,
+                   cameras_to_use=['all']):
 
+    # extract trial ids from trial names
+    if dynamic_trialNames is not None and len(dynamic_trialNames)>0:
+        trialNames = getTrialNameIdMapping(session_ids[0])
+        dynamic_ids = [trialNames[name]['id'] for name in dynamic_trialNames]
+    else:
+        dynamic_ids = dynamic_trialNames
+    
     if (type(calib_id) == str or type(static_id) == str or type(dynamic_ids) == str or 
         (type(dynamic_ids)==list and len(dynamic_ids)>0)) and len(session_ids) >1:
         raise Exception('can only have one session number if hardcoding other trial ids')
@@ -258,8 +362,10 @@ def batchReprocess(session_ids,calib_id,static_id,dynamic_ids,poseDetector='Open
         print('Processing ' + session_id)
         
         # check if write permissions (session owner or admin)
-        permissions = requests.get(API_URL + "sessions/{}/get_session_permission/".format(session_id),
-                     headers = {"Authorization": "Token {}".format(API_TOKEN)}).json()
+        response = makeRequestWithRetry('GET',
+                                        API_URL + "sessions/{}/get_session_permission/".format(session_id),
+                                        headers = {"Authorization": "Token {}".format(API_TOKEN)})
+        permissions = response.json()
         hasWritePermissions = permissions['isAdmin'] or permissions['isOwner']
 
 
@@ -269,13 +375,27 @@ def batchReprocess(session_ids,calib_id,static_id,dynamic_ids,poseDetector='Open
             calib_id_toProcess = calib_id
         
         if len(calib_id_toProcess) > 0:
-            processTrial(session_id,
-                          calib_id_toProcess,
-                          trial_type="calibration",
-                          poseDetector = poseDetector,
-                          deleteLocalFolder = deleteLocalFolder,
-                          isDocker=isServer,
-                          hasWritePermissions = hasWritePermissions)
+            try:
+                processTrial(session_id,
+                              calib_id_toProcess,
+                              trial_type="calibration",
+                              poseDetector = poseDetector,
+                              deleteLocalFolder = deleteLocalFolder,
+                              isDocker=isServer,
+                              hasWritePermissions = hasWritePermissions,
+                              cameras_to_use=cameras_to_use)
+                statusData = {'status':'done'}
+                _ = makeRequestWithRetry('PATCH',
+                                         API_URL + "trials/{}/".format(calib_id_toProcess),
+                                         data=statusData,
+                                         headers = {"Authorization": "Token {}".format(API_TOKEN)})
+            except Exception as e:
+                print(e)
+                statusData = {'status':'error'}
+                _ = makeRequestWithRetry('PATCH',
+                                         API_URL + "trials/{}/".format(calib_id_toProcess),
+                                         data=statusData,
+                                         headers = {"Authorization": "Token {}".format(API_TOKEN)})
         
         if static_id == None:
             static_id_toProcess = getNeutralTrialID(session_id)
@@ -291,19 +411,27 @@ def batchReprocess(session_ids,calib_id,static_id,dynamic_ids,poseDetector='Open
                               poseDetector = poseDetector,
                               deleteLocalFolder = deleteLocalFolder,
                               isDocker=isServer,
-                              hasWritePermissions = hasWritePermissions)
+                              hasWritePermissions = hasWritePermissions,
+                              use_existing_pose_pickle = use_existing_pose_pickle,
+                              batchProcess = True,
+                              cameras_to_use=cameras_to_use)
                 statusData = {'status':'done'}
-                _ = requests.patch("https://api.opencap.ai/trials/{}/".format(static_id_toProcess), data=statusData,
-                         headers = {"Authorization": "Token {}".format(API_TOKEN)})
+                _ = makeRequestWithRetry('PATCH',
+                                         API_URL + "trials/{}/".format(static_id_toProcess),
+                                         data=statusData,
+                                         headers = {"Authorization": "Token {}".format(API_TOKEN)})
             except Exception as e:
                 print(e)
                 statusData = {'status':'error'}
-                _ = requests.patch("https://api.opencap.ai/trials/{}/".format(static_id_toProcess), data=statusData,
-                         headers = {"Authorization": "Token {}".format(API_TOKEN)})
+                _ = makeRequestWithRetry('PATCH',
+                                         API_URL + "trials/{}/".format(static_id_toProcess),
+                                         data=statusData,
+                                         headers = {"Authorization": "Token {}".format(API_TOKEN)})
         if dynamic_ids == None:
-
-            session = requests.get("https://api.opencap.ai/sessions/{}/".format(session_id),
-                                   headers = {"Authorization": "Token {}".format(API_TOKEN)}).json()
+            response = makeRequestWithRetry('GET',
+                                            API_URL + "sessions/{}/".format(session_id),
+                                            headers = {"Authorization": "Token {}".format(API_TOKEN)})
+            session = response.json()
             dynamic_ids_toProcess = [t['id'] for t in session['trials'] if (t['name'] != 'calibration' and t['name'] !='neutral')]
         else:
             if type(dynamic_ids) == str:
@@ -320,13 +448,81 @@ def batchReprocess(session_ids,calib_id,static_id,dynamic_ids,poseDetector='Open
                           poseDetector = poseDetector,
                           deleteLocalFolder = deleteLocalFolder,
                           isDocker=isServer,
-                          hasWritePermissions = hasWritePermissions)
+                          hasWritePermissions = hasWritePermissions,
+                          use_existing_pose_pickle = use_existing_pose_pickle,
+                          batchProcess = True,
+                          cameras_to_use=cameras_to_use)
                 
                 statusData = {'status':'done'}
-                _ = requests.patch("https://api.opencap.ai/trials/{}/".format(dID), data=statusData,
-                         headers = {"Authorization": "Token {}".format(API_TOKEN)})
+                _ = makeRequestWithRetry('PATCH',
+                                         API_URL + "trials/{}/".format(dID),
+                                         data=statusData,
+                                         headers = {"Authorization": "Token {}".format(API_TOKEN)})
             except Exception as e:
                 print(e)
                 statusData = {'status':'error'}
-                _ = requests.patch("https://api.opencap.ai/trials/{}/".format(static_id_toProcess), data=statusData,
-                         headers = {"Authorization": "Token {}".format(API_TOKEN)})
+                _ = makeRequestWithRetry('PATCH',
+                                         API_URL + "trials/{}/".format(dID),
+                                         data=statusData,
+                                         headers = {"Authorization": "Token {}".format(API_TOKEN)})
+
+def runTestSession(pose='all',isDocker=True,maxNumTries=3):
+    # We retry test sessions because different sometimes when different
+    # containers are processing the test trial, the API can change the
+    # URL, causing 404 errors. 
+    numTries = 0
+    while numTries < maxNumTries:
+        numTries += 1
+        logging.info(f"Starting test trial attempt #{numTries} of {maxNumTries}")
+        trials = {}
+        
+        if not any(s in API_URL for s in ['dev.opencap', '127.0']) : # prod trials
+            trials['openpose'] = '3f2960c7-ca29-45b0-9be5-8d74db6131e5' # session ae2d50f1-537a-44f1-96a5-f5b7717452a3 
+            trials['hrnet'] = '299ca938-8765-4a84-9adf-6bdf0e072451' # session faef80d3-0c26-452c-a7be-28dbfe04178e
+            # trials['failure'] = '698162c8-3980-46e5-a3c5-8d4f081db4c4' # failed trial for testing
+        else: # dev trials
+            trials['openpose'] = '89d77579-8371-4760-a019-95f2c793622c' # session acd0e19c-6c86-4ba4-95fd-94b97229a926
+            trials['hrnet'] = 'e0e02393-42ee-46d4-9ae1-a6fbb0b89c42' # session 3510c726-a1b8-4de4-a4a2-52b021b4aab2
+        
+        if pose == 'all':
+            trialList = list(trials.values())
+        else:
+            try: 
+                trialList = [trials[pose]]
+            except:
+                trialList = list(trials.values())
+        
+        try: 
+            for trial_id in trialList:
+                trial = getTrialJson(trial_id)
+                logging.info("Running status check on trial name: " + trial['name'] + "_" + str(trial_id) + "\n\n")
+                processTrial(trial["session"], trial_id, trial_type='static', isDocker=isDocker)
+
+            logging.info("\n\n\nStatus check succeeded. \n\n")
+            return
+        
+        # Catch and re-enter while loop if it's an HTTPError or URLError 
+        # (could be more than just 404 errors). Wait between 30 and 60 seconds 
+        # before retrying.
+        except (requests.exceptions.HTTPError, urllib.error.URLError) as e:
+            if numTries < maxNumTries:
+                logging.info(f"test trial failed on try #{numTries} due to HTTPError or URLError. Retrying.")
+                wait_time = random.randint(30,60)
+                logging.info(f"waiting {wait_time} seconds then retrying...")
+                time.sleep(wait_time)
+                continue
+            else:
+                logging.info(f"test trial failed on try #{numTries} due to HTTPError or URLError.")
+                # send email
+                message = "A backend OpenCap machine failed the status check (HTTPError or URLError). It has been stopped."
+                sendStatusEmail(message=message)
+                raise Exception('Failed status check (HTTPError or URLError). Stopped.')
+        
+        # Catch other errors and stop
+        except:
+            logging.info("test trial failed. stopping machine.")
+            # send email
+            message = "A backend OpenCap machine failed the status check (not HTTPError or URLError). It has been stopped."
+            sendStatusEmail(message=message)
+            raise Exception('Failed status check. Stopped.')
+            

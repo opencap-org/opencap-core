@@ -15,5 +15,14 @@ __pycache__
 Data/
 Examples/Data/*
 
+# Files for re-processing
+Examples/reprocessSessionServer.py
+Examples/reprocessDataServer.py
+
 *.ini
 *.stats
+
+newsletter.py
+
+.DS_Store
+.vscode/

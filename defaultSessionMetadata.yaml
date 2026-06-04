@@ -17,5 +17,5 @@ iphoneModel:
 markerAugmentationSettings:
   markerAugmenterModel: LSTM
 mass_kg: 83.2
-openSimModel: LaiArnoldModified2017_poly_withArms_weldHand
+openSimModel: LaiUhlrich2022
 subjectID: defaultSubject

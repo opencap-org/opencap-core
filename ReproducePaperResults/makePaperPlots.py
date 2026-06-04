@@ -103,7 +103,7 @@ while loadResultsNow:
                 raise Exception('The data is not found in ' + dataDir + '. Download it from https://simtk.org/projects/opencap, and save to the the repository directory. E.g., Data/LabValidation')
 
             results = np.load(os.path.join(pathOSData, 
-                          'allActivityResults.npy'),allow_pickle=True).item()
+                          'allActivities_results.npy'),allow_pickle=True).item()
         
         # Preallocate dictionary 
         if iSub == 0:
@@ -788,6 +788,7 @@ plt.plot(yTrue,yPred,linestyle='none',marker='o',color='k',ms=2)
 # y=x
 xVals = np.array((0,10))
 m, b = np.polyfit(yTrue,yPred, 1)
+plt.plot(xVals,xVals,color=np.multiply([1,1,1],.8),linewidth=.5,ls='--')
 plt.plot(xVals,m*xVals+b,color='k',linestyle='-',linewidth=1)
 ax = plt.gca()
 
@@ -807,6 +808,7 @@ plt.text(0.04,.90,'a',weight='bold',transform=ax.transAxes,fontsize=10)
 mae = mean_absolute_error(yTrue,yPred)
 r2 = calc_r2(yTrue,yPred)
 plt.text(.45,.1,'MAE={:.2f}\n'.format(mae) + '$r^2$={:.2f}'.format(r2),transform=ax.transAxes)
+plt.text(.07,0.02,'y=x',fontsize=SMALL_SIZE,color=np.multiply([1,1,1],.8),transform=ax.transAxes,rotation=45)
 
 #KAM and MCF P1 changes
 plt.subplot(1,2,2)
@@ -957,7 +959,7 @@ print('\nstats_APM_opencap:'); print(stats_STS_APM_opencap)
 print('\nstats_APM_mocap:'); print(stats_STS_APM_mocap)
 
 
-#  Bar plot with dot plots nextdoor
+# Bar plot with dot plots nextdoor
 SMALL_SIZE = 8
 MEDIUM_SIZE = 9
 BIGGER_SIZE = 10
@@ -1004,6 +1006,7 @@ xRand = np.random.uniform(low=0, high=0,size=int(len(inData[0])/2))
 xRand = np.concatenate((xRand,-xRand))
 for x,y in zip(xPos,inData):
     plt.plot(x+xRand,y,'ko',mfc='none',markerSize=2.2,mew=.25)
+  
 
 plt.legend(barH,['Mocap', 'OpenCap'],frameon=False,fontsize='small',
            loc=(.5,.2))
@@ -1011,7 +1014,7 @@ plt.legend(barH,['Mocap', 'OpenCap'],frameon=False,fontsize='small',
 ax.spines['top'].set_visible(False)
 ax.spines['bottom'].set_visible(False)
 ax.spines['right'].set_visible(False)
-plt.ylabel('Sagittal-plane\n moment (%BW*ht)')
+plt.ylabel('Change in sagittal-plane\n moment (%BW*ht)')
 plt.ylim([-2.1,2.9])
 plt.xlim([0,9])
 ax.set_xticks(np.array([1.5,4.5,7.5]))
@@ -1036,8 +1039,7 @@ plt.subplot(1,2,2)
 y_true = ref_KEM_cond1 + ref_KEM_cond2
 y_pred = sim_KEM_cond1 + sim_KEM_cond2
 
-plt.plot(y_true[0:10],y_pred[0:10],marker='o',mfc=bk,mec='none',linestyle='none',ms=3)
-plt.plot(y_true[10:20],y_pred[10:20],marker='o',mfc=bk,mec='none',linestyle='none',ms=3)
+plt.plot(y_true,y_pred,marker='o',mfc=bk,mec='none',linestyle='none',ms=3)
 
 ax = plt.gca()
 ax.spines['top'].set_visible(False)
@@ -1053,6 +1055,7 @@ maxAx = np.max([ylim,xlim])
 # y=x
 xVals = np.array((minAx,maxAx))
 m, b = np.polyfit(y_true,y_pred, 1)
+plt.plot(xVals,xVals,color=np.multiply([1,1,1],.8),linewidth=.5,ls='--')
 plt.plot(xVals,m*xVals+b,color='k',linestyle='-',linewidth=1)
 
 ax.set_aspect('equal')
@@ -1066,6 +1069,7 @@ r2 = calc_r2(y_true,y_pred)
 mae = mean_absolute_error(y_true,y_pred)
 plt.text(.1,.65,'$r^2$={:.2f} \nMAE={:.2f}'.format(r2,mae),transform=ax.transAxes)
 plt.text(0.03,.93,'b',weight='bold',transform=ax.transAxes,fontsize=BIGGER_SIZE)
+plt.text(.8,.87,'y=x',fontsize=SMALL_SIZE,color=np.multiply([1,1,1],.8),transform=ax.transAxes,rotation=45)
 
 
 fig.tight_layout()
@@ -1076,6 +1080,20 @@ if saveFigures:
     thisFigPath = os.path.join(figPath,'STS.svg')
     plt.savefig(thisFigPath, format='svg')
 
+# Evaluate changes in KEM to compare to literature changes in strength. Larrson
+# 1976 found loss of isokinetic strength y = -.93+169.5 Nm
+
+# calculate %BW*ht multiplier to put moments back in Nm
+BWht_mult = np.divide(results_all['STS']['GRMs_BWht']['ref'][1,52,:],
+          results_all['STS']['GRMs']['ref'][1,52,:])
+KEM_BWht_MAE = np.mean(np.abs(np.subtract(y_pred,y_true)))
+KEM_Nm_MAE = np.mean(np.abs(np.divide(
+    np.subtract(y_pred,y_true),np.tile(BWht_mult,2))))
+
+# From Larrson regression
+KEM_MAE_in_years = KEM_Nm_MAE/0.93
+print('MAE in STS KEM ({:.2}%BW*ht ({:.2}Nm)) is equivalent to {:.2} years loss in isokinetic strength (Larsson 1996).'.format(
+    KEM_BWht_MAE,KEM_Nm_MAE,KEM_MAE_in_years))
 
 # %% Figure 5: Squats Vasti activations + classification 
 

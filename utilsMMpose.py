@@ -2,7 +2,7 @@ import cv2
 import pickle
 import torch
 
-from tqdm import tqdm
+# from tqdm import tqdm
 from mmpose_utils import process_mmdet_results, frame_iter, concat, convert_instance_to_frame
 try:
     from mmdet.apis import inference_detector, init_detector
@@ -47,7 +47,8 @@ def detection_inference(model_config, model_ckpt, video_path, bbox_path,
 
     output = []
     nFrames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    for img in tqdm(frame_iter(cap), total=nFrames):
+    # for img in tqdm(frame_iter(cap), total=nFrames):
+    for img in frame_iter(cap):
         # test a single image, the resulting box is (x1, y1, x2, y2)
         mmdet_results = inference_detector(det_model, img)
 
@@ -87,7 +88,8 @@ def pose_inference(model_config, model_ckpt, video_path, bbox_path, pkl_path,
     # run pose inference
     print("Running pose inference...")
     instances = []
-    for batch in tqdm(dataloader):
+    # for batch in tqdm(dataloader):
+    for batch in dataloader:
         batch['img'] = batch['img'].to(device)
         batch['img_metas'] = [img_metas[0] for img_metas in batch['img_metas'].data]
         with torch.no_grad():
@@ -122,7 +124,8 @@ def pose_inference(model_config, model_ckpt, video_path, bbox_path, pkl_path,
         dataset = model.cfg.data.test.type
         dataset_info_d = get_dataset_info()
         dataset_info = DatasetInfo(dataset_info_d[dataset])
-        for pose_results, img in tqdm(zip(results, frame_iter(cap))):
+        # for pose_results, img in tqdm(zip(results, frame_iter(cap))):
+        for pose_results, img in zip(results, frame_iter(cap)):        
             for instance in pose_results:
                 instance['keypoints'] = instance['preds_with_flip']
             vis_img = vis_pose_tracking_result(model, img, pose_results,

@@ -4,10 +4,11 @@ import utilsDataman
 import copy
 import tensorflow as tf
 from utils import TRC2numpy
+import json
 
 def augmentTRC(pathInputTRCFile, subject_mass, subject_height,
                pathOutputTRCFile, augmenterDir, augmenterModelName="LSTM",
-               augmenter_model='v0.2', offset=True):
+               augmenter_model='v0.3', offset=True):
     
     # This is by default - might need to be adjusted in the future.
     featureHeight = True
@@ -20,7 +21,7 @@ def augmentTRC(pathInputTRCFile, subject_mass, subject_height,
         augmenterModelType_all = [augmenter_model]
         feature_markers_all = [feature_markers_full]
         response_markers_all = [response_markers_full]            
-    else:
+    elif augmenter_model == 'v0.1' or augmenter_model == 'v0.2':
         # Lower body           
         augmenterModelType_lower = '{}_lower'.format(augmenter_model)
         from utils import getOpenPoseMarkers_lowerExtremity
@@ -32,14 +33,23 @@ def augmentTRC(pathInputTRCFile, subject_mass, subject_height,
         augmenterModelType_all = [augmenterModelType_lower, augmenterModelType_upper]
         feature_markers_all = [feature_markers_lower, feature_markers_upper]
         response_markers_all = [response_markers_lower, response_markers_upper]
+    else:
+        # Lower body           
+        augmenterModelType_lower = '{}_lower'.format(augmenter_model)
+        from utils import getOpenPoseMarkers_lowerExtremity2
+        feature_markers_lower, response_markers_lower = getOpenPoseMarkers_lowerExtremity2()
+        # Upper body
+        augmenterModelType_upper = '{}_upper'.format(augmenter_model)
+        from utils import getMarkers_upperExtremity_noPelvis2
+        feature_markers_upper, response_markers_upper = getMarkers_upperExtremity_noPelvis2()        
+        augmenterModelType_all = [augmenterModelType_lower, augmenterModelType_upper]
+        feature_markers_all = [feature_markers_lower, feature_markers_upper]
+        response_markers_all = [response_markers_lower, response_markers_upper]
+    # print('Using augmenter model: {}'.format(augmenter_model))
     
     # %% Process data.
     # Import TRC file
     trc_file = utilsDataman.TRCFile(pathInputTRCFile)
-    
-    # Get reference marker position.
-    referenceMarker = "midHip"
-    referenceMarker_data = trc_file.marker(referenceMarker)
     
     # Loop over augmenter types to handle separate augmenters for lower and
     # upper bodies.
@@ -58,9 +68,11 @@ def augmentTRC(pathInputTRCFile, subject_mass, subject_height,
         trc_data = TRC2numpy(pathInputTRCFile, feature_markers)
         trc_data_data = trc_data[:,1:]
         
-
-        
         # Step 2: Normalize with reference marker position.
+        with open(os.path.join(augmenterModelDir, "metadata.json"), 'r') as f:
+            metadata = json.load(f)
+        referenceMarker = metadata['reference_marker']
+        referenceMarker_data = trc_file.marker(referenceMarker)
         norm_trc_data_data = np.zeros((trc_data_data.shape[0],
                                        trc_data_data.shape[1]))
         for i in range(0,trc_data_data.shape[1],3):
@@ -100,7 +112,7 @@ def augmentTRC(pathInputTRCFile, subject_mass, subject_height,
         json_file.close()
         model = tf.keras.models.model_from_json(pretrainedModel_json)
         model.load_weights(os.path.join(augmenterModelDir, "weights.h5"))  
-        outputs = model.predict(inputs)
+        outputs = model.predict(inputs, verbose=2)
         
         # %% Post-process outputs.
         # Step 1: Reshape if necessary (eg, LSTM)
@@ -139,7 +151,7 @@ def augmentTRC(pathInputTRCFile, subject_mass, subject_height,
                            (len(outputs_all[idx_augm]['response_markers']))*3)
         responses_all_conc[:,idx_acc_res:idx_acc_res_end] = (
             outputs_all[idx_augm]['response_data'])
-        idx_acc_res += idx_acc_res_end
+        idx_acc_res = idx_acc_res_end
     # Minimum y-position across response markers.
     min_y_pos = np.min(responses_all_conc[:,1::3])
         

@@ -1,7 +1,7 @@
 version: "3.9"
 services:
   mobilecap:
-    image: 660440363484.dkr.ecr.us-west-2.amazonaws.com/opencap/opencap
+    image: ${OPENCAP_IMAGE_NAME}
     volumes:
       - data:/data
     env_file:
@@ -13,10 +13,16 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
               capabilities: [gpu]
+              device_ids: ["${INSTANCE_ID}"]
+    cpuset: "${CPU_SET}"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"  # Rotate when the log reaches 10MB
+        max-file: "7"    # Keep the last 7 log files
   openpose:
-    image: 660440363484.dkr.ecr.us-west-2.amazonaws.com/opencap/openpose
+    image: ${OPENPOSE_IMAGE_NAME}
     volumes:
       - data:/openpose/data
     deploy:
@@ -24,10 +30,17 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
               capabilities: [gpu]
+              device_ids: ["${INSTANCE_ID}"]
+    cpuset: "${CPU_SET}"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"  # Rotate when the log reaches 10MB
+        max-file: "7"    # Keep the last 7 log files
+    restart: on-failure:3
   mmpose:
-    image: 660440363484.dkr.ecr.us-west-2.amazonaws.com/opencap/mmpose
+    image: ${MMPOSE_IMAGE_NAME}
     volumes:
       - data:/mmpose/data
     deploy:
@@ -35,7 +48,15 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
               capabilities: [gpu]
+              device_ids: ["${INSTANCE_ID}"]
+    cpuset: "${CPU_SET}"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"  # Rotate when the log reaches 10MB
+        max-file: "7"    # Keep the last 7 log files
+    restart: on-failure:3
+
 volumes:
   data: {}

@@ -4,14 +4,25 @@ import opensim
 import numpy as np
 import glob
 import json
+import logging
 from utils import storage2numpy
 
 # %% Scaling.
 def runScaleTool(pathGenericSetupFile, pathGenericModel, subjectMass,
                  pathTRCFile, timeRange, pathOutputFolder, 
                  scaledModelName='not_specified', subjectHeight=0,
-                 createModelWithContacts=False, fixed_markers=False):
+                 createModelWithContacts=False, fixed_markers=False,
+                 suffix_model=''):
     
+    logging.info(f"Scaling setup file: {pathGenericSetupFile}")
+    logging.info(f"Scaling model file: {pathGenericModel}")
+    logging.info(f"Scaling TRC file: {pathTRCFile}")
+    logging.info(f"Scaling output dir: {pathOutputFolder}")
+    logging.debug(f"subjectMass: {subjectMass}")
+    logging.debug(f"subjectHeight: {subjectHeight}")
+    logging.debug(f"timeRange: {timeRange}")
+    logging.debug(f"suffix_model: {suffix_model}")
+
     dirGenericModel, scaledModelNameA = os.path.split(pathGenericModel)
     
     # Paths.
@@ -28,20 +39,20 @@ def runScaleTool(pathGenericSetupFile, pathGenericModel, subjectMass,
     
     # Marker set.
     _, setupFileName = os.path.split(pathGenericSetupFile)
-    if 'Lai' in scaledModelName or 'Rajagopal' in scaledModelName:        
-        if 'Mocap' in setupFileName:        
-            markerSetFileName = 'RajagopalModified2016_markers_mocap.xml'
+    if 'Lai' in scaledModelName or 'Rajagopal' in scaledModelName:
+        if 'Mocap' in setupFileName:
+            markerSetFileName = 'LaiUhlrich2022_markers_mocap{}.xml'.format(suffix_model)
         elif 'openpose' in setupFileName:
-            markerSetFileName = 'RajagopalModified2016_markers_openpose.xml'
+            markerSetFileName = 'LaiUhlrich2022_markers_openpose.xml'
         elif 'mmpose' in setupFileName:
-            markerSetFileName = 'RajagopalModified2016_markers_mmpose.xml'    
+            markerSetFileName = 'LaiUhlrich2022_markers_mmpose.xml'
         else:
             if fixed_markers:
-                markerSetFileName = 'RajagopalModified2016_markers_augmenter_fixed.xml'
+                markerSetFileName = 'LaiUhlrich2022_markers_augmenter_fixed.xml'
             else:
-                markerSetFileName = 'RajagopalModified2016_markers_augmenter.xml'
+                markerSetFileName = 'LaiUhlrich2022_markers_augmenter{}.xml'.format(suffix_model)
     elif 'gait2392' in scaledModelName:
-         if 'Mocap' in setupFileName:  
+         if 'Mocap' in setupFileName:
              markerSetFileName = 'gait2392_markers_mocap.xml'
          else:
             markerSetFileName = 'gait2392_markers_augmenter.xml'
@@ -153,6 +164,11 @@ def runScaleTool(pathGenericSetupFile, pathGenericModel, subjectMass,
 def runIKTool(pathGenericSetupFile, pathScaledModel, pathTRCFile,
               pathOutputFolder, timeRange=[], IKFileName='not_specified'):
     
+    logging.info(f"IK setup file: {pathGenericSetupFile}")
+    logging.info(f"IK model file: {pathScaledModel}")
+    logging.info(f"IK TRC file: {pathTRCFile}")
+    logging.info(f"IK output dir: {pathOutputFolder}")
+
     # Paths
     if IKFileName == 'not_specified':
         _, IKFileName = os.path.split(pathTRCFile)
@@ -162,11 +178,44 @@ def runIKTool(pathGenericSetupFile, pathScaledModel, pathTRCFile,
     pathOutputSetup =  os.path.join(
         pathOutputFolder, 'Setup_IK_' + IKFileName + '.xml')
     
-    # Setup IK tool.
+    # To make IK faster, we remove the patellas and their constraints from the
+    # model. Constraints make the IK problem more difficult, and the patellas
+    # are not used in the IK solution for this particular model. Since muscles
+    # are attached to the patellas, we also remove all muscles.
     opensim.Logger.setLevelString('error')
+    model = opensim.Model(pathScaledModel)
+    # Remove all actuators.                                         
+    forceSet = model.getForceSet()
+    forceSet.setSize(0)
+    # Remove patellofemoral constraints.
+    constraintSet = model.getConstraintSet()
+    patellofemoral_constraints = [
+        'patellofemoral_knee_angle_r_con', 'patellofemoral_knee_angle_l_con']
+    for patellofemoral_constraint in patellofemoral_constraints:
+        i = constraintSet.getIndex(patellofemoral_constraint, 0)
+        constraintSet.remove(i)       
+    # Remove patella bodies.
+    bodySet = model.getBodySet()
+    patella_bodies = ['patella_r', 'patella_l']
+    for patella in patella_bodies:
+        i = bodySet.getIndex(patella, 0)
+        bodySet.remove(i)
+    # Remove patellofemoral joints.
+    jointSet = model.getJointSet()
+    patellofemoral_joints = ['patellofemoral_r', 'patellofemoral_l']
+    for patellofemoral in patellofemoral_joints:
+        i = jointSet.getIndex(patellofemoral, 0)
+        jointSet.remove(i)
+    # Print the model to a new file.
+    model.finalizeConnections
+    model.initSystem()
+    pathScaledModelWithoutPatella = pathScaledModel.replace('.osim', '_no_patella.osim')
+    model.printToXML(pathScaledModelWithoutPatella)   
+
+    # Setup IK tool.    
     IKTool = opensim.InverseKinematicsTool(pathGenericSetupFile)            
     IKTool.setName(IKFileName)
-    IKTool.set_model_file(pathScaledModel)          
+    IKTool.set_model_file(pathScaledModelWithoutPatella)          
     IKTool.set_marker_file(pathTRCFile)
     if timeRange:
         IKTool.set_time_range(0, timeRange[0])
@@ -179,7 +228,7 @@ def runIKTool(pathGenericSetupFile, pathScaledModel, pathTRCFile,
     command = 'opensim-cmd -o error' + ' run-tool ' + pathOutputSetup
     os.system(command)
     
-    return pathOutputMotion
+    return pathOutputMotion, pathScaledModelWithoutPatella
     
     
 # %% This function will look for a time window, of a minimum duration specified
@@ -562,7 +611,7 @@ def compareTRCAndForcesTime(pathTRC,pathForces):
 # %% This takes model and IK and generates a json of body transforms that can 
 # be passed to the webapp visualizer
 def generateVisualizerJson(modelPath,ikPath,jsonOutputPath,statesInDegrees=True,
-                           vertical_offset=None):
+                           vertical_offset=None, roundToRotations=None, roundToTranslations=None):
     
     opensim.Logger.setLevelString('error')
     model = opensim.Model(modelPath)
@@ -659,8 +708,14 @@ def generateVisualizerJson(modelPath,ikPath,jsonOutputPath,statesInDegrees=True,
             # geometry origin. Ayman said getting transform to Geometry::Mesh is safest
             # but we don't have access to it thru API and Ayman said what we're doing
             # is OK for now
-            visualizeDict['bodies'][body.getName()]['rotation'].append(body.getTransformInGround(state).R().convertRotationToBodyFixedXYZ().to_numpy().tolist())
-            visualizeDict['bodies'][body.getName()]['translation'].append(body.getTransformInGround(state).T().to_numpy().tolist())
+            c_rotations = body.getTransformInGround(state).R().convertRotationToBodyFixedXYZ().to_numpy()
+            c_translations = body.getTransformInGround(state).T().to_numpy()
+            if roundToRotations is not None:                
+                c_rotations = np.round(c_rotations, roundToRotations)
+            if roundToTranslations is not None:
+                c_translations = np.round(c_translations, roundToTranslations)
+            visualizeDict['bodies'][body.getName()]['rotation'].append(c_rotations.tolist())
+            visualizeDict['bodies'][body.getName()]['translation'].append(c_translations.tolist())            
             
     with open(jsonOutputPath, 'w') as f:
         json.dump(visualizeDict, f)
