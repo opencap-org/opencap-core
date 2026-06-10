@@ -1,5 +1,0 @@
-participant_id,session_id,trial_name,trial_type,step,action,description,window_frames,marker_name,t_first_s,t_last_s,n_anchor_points
-subject2,subject2,ID2_S7_sprint,,1,median_filter,"Median filter applied to all markers (window=7 frames, NaN-safe)",7,,,,
-subject2,subject2,ID2_S7_sprintNoSync,,1,median_filter,"Median filter applied to all markers (window=7 frames, NaN-safe)",7,,,,
-subject2,subject2,ID2_S7_sprintNoSync_median_filtered,,1,median_filter,"Median filter applied to all markers (window=7 frames, NaN-safe)",7,,,,
-subject2,subject2,ID2_S7_sprint_median_filtered,,1,median_filter,"Median filter applied to all markers (window=7 frames, NaN-safe)",7,,,,

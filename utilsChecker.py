@@ -25,12 +25,9 @@ from utilsCameraPy3 import Camera, nview_linear_triangulations
 from utils import getOpenPoseMarkerNames, getOpenPoseFaceMarkers
 from utils import numpy2TRC, rewriteVideos, delete_multiple_element,loadCameraParameters
 from utils import makeRequestWithRetry
-from utilsAPI import getAPIURL
-
-from utilsAuth import getToken
-
-API_TOKEN = getToken()
-API_URL = getAPIURL()
+# Local-only: cloud API disabled.
+API_TOKEN = None
+API_URL = None
 
 # %%
 def download_file(url, file_name):
@@ -195,70 +192,10 @@ def calcIntrinsics(folderName, CheckerBoardParams=None, filenames=['*.jpg'],
 
 # %%
 def computeAverageIntrinsics(session_path,trialIDs,CheckerBoardParams,nImages=25):
-    CamParamList = []
-    camModels = []
-    
-    for trial_id in trialIDs:
-        resp = makeRequestWithRetry('GET',
-                                    API_URL + "trials/{}/".format(trial_id),
-                                    headers = {"Authorization": "Token {}".format(API_TOKEN)})
-        trial = resp.json()
-        camModels.append(trial['videos'][0]['parameters']['model'])
-        trial_name = trial['name']
-        if trial_name == 'null':
-            trial_name = trial_id
-        
-        # Make directory (folder for trialname, intrinsics also saved there)
-        video_dir = os.path.join(session_path,trial_name)
-        os.makedirs(video_dir, exist_ok=True)
-        video_path = os.path.join(video_dir,trial_name + ".mov")
-        
-        # Download video if not done
-        if not os.path.exists(video_path):
-            download_file(trial["videos"][0]["video"], video_path)
-            
-        if not os.path.exists(os.path.join(video_dir,'cameraIntrinsics.pickle')):
-            
-            # Compute intrinsics from images popped out of intrinsic video.
-            video2Images(video_path,filePrefix=trial_name,nImages=nImages)
-            CamParams = calcIntrinsics(os.path.join(session_path,trial_name), CheckerBoardParams=CheckerBoardParams,
-                                       filenames=['*.jpg'], 
-                                       saveFileName=os.path.join(video_dir,'cameraIntrinsics.pickle'),
-                                       visualize = False)
-            if CamParams is None:
-                saveCameraParameters(os.path.join(video_dir,'cameraIntrinsics.pickle'),CamParams)
-            
-        else:
-            CamParams = loadCameraParameters(os.path.join(video_dir,'cameraIntrinsics.pickle'))
-        
-        if CamParams is not None:
-            CamParamList.append(CamParams)
-    
-    # Compute results
-    intComp = {}
-    intComp['fx'] = [c['intrinsicMat'][0,0] for c in CamParamList]
-    intComp['fy'] = [c['intrinsicMat'][1,1] for c in CamParamList]
-    intComp['cx'] = [c['intrinsicMat'][0,2] for c in CamParamList]
-    intComp['cy'] = [c['intrinsicMat'][1,2] for c in CamParamList]
-    intComp['d'] = np.asarray([c['distortion'] for c in CamParamList])
-   
-    intCompNames = list(intComp.keys())
-    for v in intCompNames:
-        intComp[v + '_u'] = np.mean(intComp[v],axis=0)
-        intComp[v + '_std'] = np.std(intComp[v],axis=0)
-        intComp[v + '_stdPerc'] = np.divide(intComp[v + '_std'],intComp[v + '_u']) * 100
-        
-    phoneModel = camModels[0]
-    if any([camModel != phoneModel for camModel in camModels]):
-        raise Exception('You are averaging intrinsics across different phone models.')
-    
-    # output averaged parameters
-    CamParamsAverage = {}
-    params = list(CamParamList[0].keys())
-    for param in params:
-        CamParamsAverage[param] = np.mean(np.asarray([c[param] for c in CamParamList]),axis=0)
-
-    return CamParamsAverage, CamParamList, intComp, phoneModel
+    raise RuntimeError(
+        "computeAverageIntrinsics requires the OpenCap cloud API. "
+        "Use local cameraIntrinsicsExtrinsics.pickle files instead."
+    )
 
 
 # %%

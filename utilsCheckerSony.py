@@ -23,12 +23,10 @@ import copy
 from utilsCameraPy3 import Camera, nview_linear_triangulations
 from utils import getOpenPoseMarkerNames, getOpenPoseFaceMarkers
 from utils import numpy2TRC, rewriteVideos, delete_multiple_element,loadCameraParameters
-from utilsAPI import getAPIURL
 
-from utilsAuth import getToken
 
-API_TOKEN = getToken()
-API_URL = getAPIURL()
+API_TOKEN = None
+API_URL = None
 
 # %%
 def download_file(url, file_name):
