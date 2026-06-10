@@ -13,9 +13,6 @@
 
     The doubly-filtered TRC is then fed into the LSTM augmenter. No filters
     are applied after augmentation. Everything else is identical to main.py.
-
-    Set runOpenSimPipeline=False to stop after writing the post-augmentation
-    TRC (skip scaling, IK, and visualizer JSON). Useful for batch marker export.
 """
 
 import os 
@@ -38,7 +35,7 @@ from utilsChecker import triangulateMultiviewVideo
 from utilsChecker import writeTRCfrom3DKeypoints
 from utilsChecker import popNeutralPoseImages
 from utilsChecker import rotateIntrinsics
-from utilsSync import synchronizeVideos, loadPresynchronizedVideos
+from utilsSync import synchronizeVideos, loadPresynchronizedVideosAndFilter, loadPresynchronizedVideos
 from utilsDetector  import runPoseDetector
 from utilsAugmenter import augmentTRC
 from utilsOpenSim import runScaleTool, getScaleTimeRange, runIKTool, generateVisualizerJson
@@ -64,7 +61,7 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
          # Options: 'handPunch', 'gait', 'general', or None (auto-detect).
          forceSyncActivity=None,
          runMedianFilter=True,
-         runOpenSimPipeline=True):
+         runOpenSimPipeline=False):
 
     # %% High-level settings.
     # Camera calibration.
@@ -76,8 +73,8 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
     runTriangulation = True
     # Marker augmentation.
     runMarkerAugmentation = True
-    # OpenSim pipeline (scaling, IK, visualizer JSON).
-    runOpenSimPipeline = bool(runOpenSimPipeline)
+    # OpenSim pipeline.
+    runOpenSimPipeline = True    
     # High-resolution for OpenPose.
     resolutionPoseDetection = resolutionPoseDetection
     # Set to False to only generate the json files (default is True).
@@ -448,7 +445,7 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
 
         try:
             keypoints2D, confidence, keypointNames, frameRate, nansInOut, startEndFrames, cameras2Use = (
-                loadPresynchronizedVideos( # End up removing this filtering
+                loadPresynchronizedVideosAndFilter( # End up removing this filtering
                 cameraDirectories, trialRelativePath, poseDetectorDirectory,
                 undistortPoints=True, CamParamDict=CamParamDict,
                 filtFreqs=filtFreqs, confidenceThreshold=0.4,

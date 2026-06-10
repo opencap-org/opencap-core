@@ -29,7 +29,8 @@ def synchronizeVideos(CameraDirectories, trialRelativePath, pathPoseDetector,
                       poseDetector='OpenPose', trialName=None, bbox_thr=0.8,
                       resolutionPoseDetection='default', 
                       visualizeKeypointAnimation=False,
-                      syncVer=DEFAULT_SYNC_VER):
+                      syncVer=DEFAULT_SYNC_VER,
+                      forceSyncActivity=None):
     
     markerNames = getOpenPoseMarkerNames()
     
@@ -75,6 +76,16 @@ def synchronizeVideos(CameraDirectories, trialRelativePath, pathPoseDetector,
         else:
             pointList.append(key2D)
             confList.append(confidence)
+
+    if len(pointList) == 0:
+        raise Exception(
+            "No usable 2D keypoints were found for synchronization. "
+            "This usually means pose detection did not produce valid outputs "
+            "(missing/empty `*_rotated_pp.pkl` files or missing rotated videos). "
+            "Verify that pose detection ran successfully for at least 2 cameras "
+            f"for trial '{trialName}' and that the `OutputPkl_{resolutionPoseDetection}` "
+            "folder contains `*_rotated_pp.pkl` files."
+        )
         
     # If video is not existing, the corresponding camera should be removed.
     idx_camToExclude = []
@@ -126,7 +137,8 @@ def synchronizeVideos(CameraDirectories, trialRelativePath, pathPoseDetector,
         maxShiftSteps=2*frameRate, CameraParams=CamParamList_selectedCams,
         cameras2Use=cameras2Use, 
         CameraDirectories=CameraDirectories_selectedCams, trialName=trialName,
-        syncVer=syncVer)
+        syncVer=syncVer,
+        forceSyncActivity=forceSyncActivity)
     
     if undistortPoints:
         if CamParamList_selectedCams is None:
@@ -159,7 +171,8 @@ def synchronizeVideoKeypoints(keypointList, confidenceList,
                               isGait=False, CameraParams = None,
                               cameras2Use=['none'],CameraDirectories = None,
                               trialName=None, trialID='',
-                              syncVer=DEFAULT_SYNC_VER):
+                              syncVer=DEFAULT_SYNC_VER,
+                              forceSyncActivity=None):
     visualize2Dkeypoint = False # this is a visualization just for testing what filtered input data looks like
     
     # keypointList is a mCamera length list of (nmkrs,nTimesteps,2) arrays of camera 2D keypoints
@@ -354,7 +367,10 @@ def synchronizeVideoKeypoints(keypointList, confidenceList,
                                  sampleFreq=sampleFreq,
                                  )
 
-    if isHandPunch:
+    if forceSyncActivity in ('handPunch', 'gait', 'general'):
+        syncActivity = forceSyncActivity
+        logging.info(f'Sync activity overridden to: {syncActivity}')
+    elif isHandPunch:
         syncActivity = 'handPunch'
     elif isGait:
         syncActivity = 'gait'
@@ -1934,8 +1950,8 @@ def find_longest_confidence_stretch_in_range_with_gaps(confList, confThresh, max
     # If no valid stretches found, return None
     return None
 
-# Function for presynchronized videos
-def loadPresynchronizedVideos(CameraDirectories, trialRelativePath, pathPoseDetector,
+    # Function for presynchronized videos
+def loadPresynchronizedVideosAndFilter(CameraDirectories, trialRelativePath, pathPoseDetector,
                                undistortPoints=False, CamParamDict=None, 
                                confidenceThreshold=0.3, 
                                filtFreqs={'gait':12,'default':30},
@@ -2065,6 +2081,125 @@ def loadPresynchronizedVideos(CameraDirectories, trialRelativePath, pathPoseDete
         keypointsSync.append(key[:, :minFrames, :])
         confidenceSync.append(confidence[:, :minFrames])
         nansInOutSync.append(nansInOutList[iCam])
+        # Start and end frames (0 to minFrames since no sync offset)
+        startEndFrames.append([0, minFrames-1])
+    
+    # Undistort points if requested
+    if undistortPoints:
+        if CamParamList_selectedCams is None:
+            raise Exception('Need to have CamParamList to undistort Images')
+        unpackedPoints = unpackKeypointList(keypointsSync)
+        undistortedPoints = []
+        for points in unpackedPoints:
+            undistortedPoints.append(undistort2Dkeypoints(
+                points, CamParamList_selectedCams, useIntrinsicMatAsP=True))
+        keypointsSync = repackKeypointList(undistortedPoints)
+    
+    # Convert lists to dictionaries (same structure as synchronizeVideos output)
+    pointDir = {}
+    confDir = {}
+    nansInOutDir = {}
+    startEndFramesDir = {}
+    for iCam, camName in enumerate(cameras2Use):
+        pointDir[camName] = keypointsSync[iCam]
+        confDir[camName] = confidenceSync[iCam]
+        nansInOutDir[camName] = nansInOutSync[iCam]
+        startEndFramesDir[camName] = startEndFrames[iCam]
+    
+    logging.info(f"Loaded pre-synchronized videos with {minFrames} frames across {len(cameras2Use)} cameras")
+    
+    return pointDir, confDir, markerNames, frameRate, nansInOutDir, startEndFramesDir, cameras2Use
+
+# Function for presynchronized videos
+def loadPresynchronizedVideos(CameraDirectories, trialRelativePath, pathPoseDetector,
+                               undistortPoints=False, CamParamDict=None, 
+                               confidenceThreshold=0.3, 
+                               filtFreqs={'gait':12,'default':30},
+                               imageBasedTracker=False, cams2Use=['all'],
+                               poseDetector='OpenPose', trialName=None, bbox_thr=0.8,
+                               resolutionPoseDetection='default'):
+    """
+    Load 2D keypoints from already-synchronized videos without performing synchronization.
+    Assumes all videos have the same number of frames and are temporally aligned.
+    
+    Returns the same structure as synchronizeVideos() so the rest of the pipeline works unchanged.
+    """
+    
+    markerNames = getOpenPoseMarkerNames()
+    
+    # Create list of cameras.
+    if cams2Use[0] == 'all':
+        cameras2Use = list(CameraDirectories.keys())
+    else:
+        cameras2Use = cams2Use
+    cameras2Use_in = copy.deepcopy(cameras2Use)
+
+    # Initialize output lists
+    pointList = []
+    confList = []
+    
+    CameraDirectories_selectedCams = {}
+    CamParamList_selectedCams = []
+    for cam in cameras2Use:
+        CameraDirectories_selectedCams[cam] = CameraDirectories[cam]
+        CamParamList_selectedCams.append(CamParamDict[cam])
+        
+    # Load data from each camera
+    camsToExclude = []
+    for camName in CameraDirectories_selectedCams:
+        cameraDirectory = CameraDirectories_selectedCams[camName]
+        videoFullPath = os.path.normpath(os.path.join(cameraDirectory,
+                                                      trialRelativePath))
+        trialPrefix, _ = os.path.splitext(
+            os.path.basename(trialRelativePath))
+        if poseDetector == 'OpenPose':
+            outputPklFolder = "OutputPkl_" + resolutionPoseDetection
+        elif poseDetector == 'mmpose':
+            outputPklFolder = "OutputPkl_mmpose_" + str(bbox_thr)
+        openposePklDir = os.path.join(outputPklFolder, trialName)
+        pathOutputPkl = os.path.join(cameraDirectory, openposePklDir)
+        ppPklPath = os.path.join(pathOutputPkl, trialPrefix+'_rotated_pp.pkl')
+        
+        # Load keypoints and confidence
+        key2D, confidence = loadPklVideo(
+            ppPklPath, videoFullPath, imageBasedTracker=imageBasedTracker,
+            poseDetector=poseDetector, confidenceThresholdForBB=0.3)
+        
+        # Get frame rate
+        thisVideo = cv2.VideoCapture(videoFullPath.replace('.mov', '_rotated.avi'))
+        frameRate = np.round(thisVideo.get(cv2.CAP_PROP_FPS))        
+        
+        if key2D.shape[1] == 0 and confidence.shape[1] == 0:
+            camsToExclude.append(camName)
+        else:
+            pointList.append(key2D)
+            confList.append(confidence)
+        
+    # Remove cameras with no data
+    idx_camToExclude = []
+    for camToExclude in camsToExclude:
+        cameras2Use.remove(camToExclude)
+        CameraDirectories_selectedCams.pop(camToExclude)
+        idx_camToExclude.append(cameras2Use_in.index(camToExclude))
+        CamParamDict.pop(camToExclude)
+        CameraDirectories.pop(camToExclude)        
+    delete_multiple_element(CamParamList_selectedCams, idx_camToExclude)    
+
+    # Find minimum frame count across all cameras
+    minFrames = min([key.shape[1] for key in pointList])
+    
+    # Trim all to the same length
+    keypointsSync = []
+    confidenceSync = []
+    startEndFrames = []
+    nansInOutSync = []
+    
+    for iCam, key in enumerate(pointList):
+        confidence = confList[iCam]
+        # Trim to minimum frame count
+        keypointsSync.append(key[:, :minFrames, :])
+        confidenceSync.append(confidence[:, :minFrames])
+        nansInOutSync.append(None)  # No NaN tracking without filtering
         # Start and end frames (0 to minFrames since no sync offset)
         startEndFrames.append([0, minFrames-1])
     

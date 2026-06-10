@@ -5,6 +5,56 @@ Utility functions for median filtering of OpenPose marker trajectories.
 
 import numpy as np
 
+
+ ############################################################
+# Use this function below if you want to use the MAD threshold to identify outliers
+############################################################
+
+# def median_window_filter(x, window, mad_threshold=1):
+#     """
+#     Moving median filter that can take np.nan as entries.
+#     Outliers are identified using the median absolute deviation.
+    
+#     Inputs:
+#         x             ->  signal to filter,
+#         window        ->  number of samples to use for median estimation (must be odd),
+#         mad_threshold  ->  threshold for identifying outliers using MAD (default is 3)
+
+#     Output:
+#         y             <-  median filtered signal
+#     """
+    
+#     # Ensure the window size is odd
+#     if window % 2 == 0:
+#         window += 1
+#     win2 = window // 2  # Now win2 is always an integer
+#     n = len(x)
+#     y = np.array(x, dtype=float)
+    
+#     for ii in range(win2, n - win2):
+#         idx = np.arange(ii - win2, ii + win2 + 1, dtype=int)
+#         valid_data = x[idx][~np.isnan(x[idx])]  # Exclude NaN values
+        
+#         if len(valid_data) > 0:
+#             median = np.nanmedian(valid_data)
+#             mad = np.nanmedian(np.abs(valid_data - median))  # Median Absolute Deviation
+            
+#             # Determine which points are considered outliers
+#             is_outlier = np.abs(valid_data - median) > mad_threshold * mad
+            
+#             # Replace outlier points with NaN in valid_data
+#             filtered_data = valid_data[~is_outlier]
+            
+#             if len(filtered_data) > 0:
+#                 y[ii] = np.nanmedian(filtered_data)
+#             else:
+#                 y[ii] = median  # If all points are outliers, use the raw median
+
+#     return y
+
+##################################################################################################
+# Use this function below to avoid the use of MAD
+
 def median_window_filter(x, window):
     """
     Moving median filter that can take np.nan as entries.
@@ -31,7 +81,7 @@ def median_window_filter(x, window):
         y[ii] = np.nanmedian(x[idx])
     
     return y
-
+##################################################################################################
 
 def median_filter_trajectory(marker_data, window=7, return_outliers=False):
     """
@@ -103,7 +153,8 @@ def median_filter_all_markers(markers_dict, window=7, verbose=False):
 
 import utilsTRC
 
-def median_filter_trc_file(input_trc_path, output_trc_path, window=7):
+def median_filter_trc_file(input_trc_path, output_trc_path, window=7,
+                           show_plot=False):
     """
     Apply median filter to all markers in a TRC file and save to a new file.
     
@@ -115,6 +166,9 @@ def median_filter_trc_file(input_trc_path, output_trc_path, window=7):
         Path to output filtered TRC file
     window : int
         Window size for median filter
+    show_plot : bool
+        If True, display the diagnostic figure (blocks until closed).
+        If False, save the PNG and close the figure automatically.
     """
     # Load TRC data
     data = utilsTRC.trc_2_dict(input_trc_path)
@@ -145,8 +199,11 @@ def median_filter_trc_file(input_trc_path, output_trc_path, window=7):
         axes[0].set_title(f'Median Filter (Window={window}) on Marker: {sample_marker}')
     plt.tight_layout()
     output_figure_path = output_trc_path.replace('.trc', '_median_filter_effect.png')
-    plt.savefig(output_figure_path, dpi=300)
-    plt.show()
+    fig.savefig(output_figure_path, dpi=300)
+    if show_plot:
+        plt.show()
+    else:
+        plt.close(fig)
     
     # print("Testing median_window_filter...")
     
