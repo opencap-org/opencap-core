@@ -9,6 +9,7 @@ v1.1
 - Added option for downloading pose pickle files. (#248)
 - Moved synchronization specific files to new module utilsSync.py. (PR #259)
 - Added main regression tests and sync unit tests. (PR #259)
+- Included sync version in getMetadataFromServer, and created test case (PR #275).
 
 Previous Changes
 ================
