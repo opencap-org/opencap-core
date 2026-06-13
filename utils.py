@@ -102,7 +102,126 @@ def importMetadata(filePath):
 def download_file(url, file_name):
     with urllib.request.urlopen(url) as response, open(file_name, 'wb') as out_file:
         shutil.copyfileobj(response, out_file)
-        
+
+def uploadFileToS3(filePath):
+    data = {'fileName':os.path.split(filePath)[1]}
+    response = makeRequestWithRetry('GET',
+                                    API_URL + "sessions/null/get_presigned_url/",
+                                    data=data)
+    r = response.json()
+
+    with open(filePath, 'rb') as file:
+        files = {'file': file}
+        makeRequestWithRetry('POST',
+                             r['url'],
+                             data=r['fields'],
+                             files=files)
+
+    return r['fields']['key']
+
+def hasLidarData(video):
+    parameters = video.get('parameters') or {}
+    has_lidar_data = parameters.get('has_lidar_data', False)
+
+    if isinstance(has_lidar_data, str):
+        return has_lidar_data.lower() == 'true'
+
+    return bool(has_lidar_data)
+
+def _safeExtractZip(zip_path, extract_dir):
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        extract_root = os.path.abspath(extract_dir)
+        for member in zip_ref.infolist():
+            member_path = os.path.abspath(os.path.join(extract_dir, member.filename))
+            if os.path.commonpath([extract_root, member_path]) != extract_root:
+                raise Exception('Unsafe path in zip file: {}'.format(member.filename))
+        zip_ref.extractall(extract_dir)
+
+def _findSingleMovFile(folder):
+    mov_files = glob.glob(os.path.join(folder, '**', '*.mov'), recursive=True)
+    mov_files += glob.glob(os.path.join(folder, '**', '*.MOV'), recursive=True)
+    mov_files = list(dict.fromkeys(mov_files))
+
+    if len(mov_files) == 0:
+        raise Exception('No .mov file found in LiDAR zip bundle.')
+    if len(mov_files) > 1:
+        raise Exception('Multiple .mov files found in LiDAR zip bundle: {}'.format(mov_files))
+
+    return mov_files[0]
+
+def _zipFolder(folder, zip_path):
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for root, dirs, files in os.walk(folder):
+            for file in files:
+                file_path = os.path.join(root, file)
+                zipf.write(file_path, os.path.relpath(file_path, folder))
+
+def updateVideoFileInAPI(video, video_path):
+    if 'id' not in video:
+        raise Exception('Cannot update video file in API because the video JSON has no id.')
+
+    media_url = uploadFileToS3(video_path)
+    video_url = "{}{}{}/".format(API_URL, "videos/", video['id'])
+    headers = {"Authorization": "Token {}".format(API_TOKEN)}
+    patch_options = [{'video_url': media_url},
+                     {'media_url': media_url},
+                     {'video': media_url}]
+
+    last_error = None
+    for data in patch_options:
+        try:
+            rVideo = makeRequestWithRetry('PATCH',
+                                          video_url,
+                                          data=data,
+                                          headers=headers)
+            try:
+                video_response = rVideo.json()
+                video['video'] = video_response.get('video', media_url)
+            except ValueError:
+                video['video'] = media_url
+            return media_url
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 400:
+                last_error = e
+                continue
+            raise
+
+    raise last_error
+
+def downloadVideoFile(video, video_path, trial_id):
+    if not hasLidarData(video):
+        download_file(video["video"], video_path)
+        return
+
+    zip_path = os.path.splitext(video_path)[0] + '.zip'
+    extract_dir = os.path.splitext(zip_path)[0]
+
+    download_file(video["video"], zip_path)
+
+    if os.path.exists(extract_dir):
+        shutil.rmtree(extract_dir)
+    os.makedirs(extract_dir, exist_ok=True)
+
+    _safeExtractZip(zip_path, extract_dir)
+    mov_path = _findSingleMovFile(extract_dir)
+
+    if os.path.exists(video_path):
+        os.remove(video_path)
+    shutil.move(mov_path, video_path)
+
+    updateVideoFileInAPI(video, video_path)
+
+    if os.path.exists(zip_path):
+        os.remove(zip_path)
+    _zipFolder(extract_dir, zip_path)
+
+    deleteResult(trial_id, tag='lidar_data', device_id=video.get('device_id'))
+    postFileToTrial(zip_path,trial_id,tag='lidar_data',
+                    device_id=video.get('device_id'))
+
+    shutil.rmtree(extract_dir)
+    os.remove(zip_path)
+
 def getTrialJson(trial_id):
     response = makeRequestWithRetry('GET',
                                     API_URL + "trials/{}/".format(trial_id),
@@ -229,21 +348,27 @@ def downloadVideosFromServer(session_id,trial_id, isDocker=True,
             for k, video in enumerate(trial["videos"]):
                 os.makedirs(os.path.join(session_path, "Videos", "Cam{}".format(k), "InputMedia", trial_name), exist_ok=True)
                 video_path = os.path.join(session_path, "Videos", "Cam{}".format(k), "InputMedia", trial_name, trial_id + ".mov")
-                download_file(video["video"], video_path)                
+                downloadVideoFile(video, video_path, trial_id)
                 mappingCamDevice[video["device_id"].replace('-', '').upper()] = k
             with open(os.path.join(session_path, "Videos", 'mappingCamDevice.pickle'), 'wb') as handle:
                 pickle.dump(mappingCamDevice, handle)
         else:
             with open(os.path.join(session_path, "Videos", 'mappingCamDevice.pickle'), 'rb') as handle:
                 mappingCamDevice = pickle.load(handle)            
-            for video in trial["videos"]:            
-                k = mappingCamDevice[video["device_id"].replace('-', '').upper()] 
+            for video in trial["videos"]:
+                device_id = video["device_id"].replace('-', '').upper()
+                if device_id not in mappingCamDevice:
+                    if not isCalibration and not isStaticPose:
+                        print('Skipping video with device_id {} because it was not in the calibration camera mapping.'.format(video["device_id"]))
+                        continue
+                    raise KeyError(device_id)
+                k = mappingCamDevice[device_id]
                 videoDir = os.path.join(session_path, "Videos", "Cam{}".format(k), "InputMedia", trial_name)
                 os.makedirs(videoDir, exist_ok=True)
                 video_path = os.path.join(videoDir, trial_id + ".mov")
                 if not os.path.exists(video_path):
                     if video['video'] :
-                        download_file(video["video"], video_path)
+                        downloadVideoFile(video, video_path, trial_id)
     
         # Import and save metadata
         sessionYamlPath = os.path.join(session_path, "sessionMetadata.yaml")
@@ -453,13 +578,14 @@ def getMetadataFromServer(session_id,justCheckerParams=False):
     
     return session_desc
 
-def deleteResult(trial_id, tag=None,resultNum=None):
+def deleteResult(trial_id, tag=None,resultNum=None,device_id=None):
     # Delete specific result number, or all results with a specific tag, or all results if tag==None
     if resultNum != None:
         resultNums = [resultNum]
     elif tag != None:
         trial = getTrialJson(trial_id)
-        resultNums = [r['id'] for r in trial['results'] if r['tag']==tag]
+        resultNums = [r['id'] for r in trial['results'] if r['tag']==tag
+                      and (device_id is None or r.get('device_id')==device_id)]
         
     elif tag == None: 
         trial = getTrialJson(trial_id)
@@ -908,28 +1034,14 @@ def getModelAndMetadata(session_id,session_path,simplePath=False):
     return
     
 def postFileToTrial(filePath,trial_id,tag,device_id):
-        
-    # get S3 link
-    data = {'fileName':os.path.split(filePath)[1]}
-    response = makeRequestWithRetry('GET',
-                                    API_URL + "sessions/null/get_presigned_url/",
-                                    data=data)
-    r = response.json()
-    
-    # upload to S3
-    files = {'file': open(filePath, 'rb')}
-    makeRequestWithRetry('POST',
-                         r['url'],
-                         data=r['fields'],
-                         files=files)
-    files["file"].close()
+    media_url = uploadFileToS3(filePath)
 
     # post link to and data to results   
     data = {
         "trial": trial_id,
         "tag": tag,
         "device_id" : device_id,
-        "media_url" : r['fields']['key']
+        "media_url" : media_url
     }
     
     rResult = makeRequestWithRetry('POST',
@@ -938,7 +1050,7 @@ def postFileToTrial(filePath,trial_id,tag,device_id):
                                    headers = {"Authorization": "Token {}".format(API_TOKEN)})
     
     if rResult.status_code != 201:
-        print('server response was + ' + str(r.status_code))
+        print('server response was + ' + str(rResult.status_code))
     else:
         print('Result posted to S3.')
     
