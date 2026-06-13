@@ -120,13 +120,12 @@ def uploadFileToS3(filePath):
     return r['fields']['key']
 
 def hasLidarData(video):
-    parameters = video.get('parameters') or {}
-    has_lidar_data = parameters.get('has_lidar_data', False)
+    is_lidar = video.get('isLidar', False)
 
-    if isinstance(has_lidar_data, str):
-        return has_lidar_data.lower() == 'true'
+    if isinstance(is_lidar, str):
+        return is_lidar.lower() == 'true'
 
-    return bool(has_lidar_data)
+    return bool(is_lidar)
 
 def _safeExtractZip(zip_path, extract_dir):
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
@@ -197,6 +196,12 @@ def downloadVideoFile(video, video_path, trial_id):
     extract_dir = os.path.splitext(zip_path)[0]
 
     download_file(video["video"], zip_path)
+
+    if not zipfile.is_zipfile(zip_path):
+        if os.path.exists(video_path):
+            os.remove(video_path)
+        shutil.move(zip_path, video_path)
+        return
 
     if os.path.exists(extract_dir):
         shutil.rmtree(extract_dir)
@@ -358,7 +363,7 @@ def downloadVideosFromServer(session_id,trial_id, isDocker=True,
             for video in trial["videos"]:
                 device_id = video["device_id"].replace('-', '').upper()
                 if device_id not in mappingCamDevice:
-                    if not isCalibration and not isStaticPose:
+                    if not isCalibration:
                         print('Skipping video with device_id {} because it was not in the calibration camera mapping.'.format(video["device_id"]))
                         continue
                     raise KeyError(device_id)
