@@ -10,9 +10,13 @@ import pickle
 import glob
 import mimetypes
 import subprocess
+import struct
 import zipfile
 import time
 import datetime
+import tempfile
+import lzma
+import zlib
 
 import numpy as np
 import pandas as pd
@@ -24,6 +28,9 @@ from utilsAPI import getAPIURL
 
 API_URL = getAPIURL()
 API_TOKEN = getToken()
+DEPTH_DB_LEVEL = 10
+DEPTH_DB_TRANSFORM = "vertical_delta_shuffle16"
+DEPTH_CONTAINER_MAGIC = b"OCDEPTHDB1\n"
 
 #%% Rest of utils
 
@@ -155,6 +162,176 @@ def _zipFolder(folder, zip_path):
                 file_path = os.path.join(root, file)
                 zipf.write(file_path, os.path.relpath(file_path, folder))
 
+def _decompressDepthBlob(blob, compression):
+    if compression in (None, "", "none"):
+        return blob
+    if compression in ("deflate_raw", "zlib"):
+        return zlib.decompress(blob, wbits=-15)
+    if compression == "zlib_wrapped":
+        return zlib.decompress(blob)
+    if compression == "lzma":
+        return lzma.decompress(blob)
+    raise ValueError("Unsupported depth compression: {}".format(compression))
+
+def _loadDepthFrames(metadata_path):
+    with open(metadata_path, "r", encoding="utf-8") as f:
+        meta = json.load(f)
+
+    if meta.get("format") != "uint16":
+        raise ValueError("Unsupported depth format: {}".format(meta.get("format")))
+    if meta.get("byte_order") != "little_endian":
+        raise ValueError("Unsupported depth byte_order: {}".format(meta.get("byte_order")))
+
+    width = int(meta["width"])
+    height = int(meta["height"])
+    frame_count = int(meta["frame_count"])
+    bytes_per_pixel = int(meta.get("bytes_per_pixel", 2))
+    frame_byte_count = int(meta.get("frame_byte_count", width * height * bytes_per_pixel))
+    if bytes_per_pixel != 2 or frame_byte_count != width * height * 2:
+        raise ValueError("Unsupported depth frame byte count.")
+
+    depth_path = os.path.join(os.path.dirname(metadata_path), meta.get("file", "depth.bin"))
+    blob = open(depth_path, "rb").read()
+
+    if meta.get("frame_layout") == "length_prefixed":
+        frames = []
+        pos = 0
+        for frame_index in range(frame_count):
+            if pos + 4 > len(blob):
+                raise ValueError("Unexpected EOF reading depth frame {} length".format(frame_index))
+            compressed_len = struct.unpack_from("<I", blob, pos)[0]
+            pos += 4
+            end = pos + compressed_len
+            if end > len(blob):
+                raise ValueError("Unexpected EOF reading depth frame {} payload".format(frame_index))
+            frame_bytes = _decompressDepthBlob(blob[pos:end], meta.get("compression", "none"))
+            pos = end
+            if len(frame_bytes) != frame_byte_count:
+                raise ValueError("Depth frame {} decoded to {} bytes; expected {}".format(
+                    frame_index, len(frame_bytes), frame_byte_count))
+            frames.append(np.frombuffer(frame_bytes, dtype="<u2").reshape(height, width))
+        if pos != len(blob):
+            raise ValueError("Trailing bytes in depth file: {}".format(len(blob) - pos))
+        depth = np.stack(frames)
+    else:
+        raw = _decompressDepthBlob(blob, meta.get("compression", "none"))
+        expected_bytes = frame_count * frame_byte_count
+        if len(raw) != expected_bytes:
+            raise ValueError("Expected {} depth bytes, got {}".format(expected_bytes, len(raw)))
+        depth = np.frombuffer(raw, dtype="<u2").reshape(frame_count, height, width)
+
+    if meta.get("predictor") == "horizontal_delta":
+        depth = np.cumsum(depth, axis=2, dtype=np.uint16).astype("<u2", copy=False)
+    elif meta.get("predictor") not in (None, "", "none"):
+        raise ValueError("Unsupported depth predictor: {}".format(meta.get("predictor")))
+
+    return np.ascontiguousarray(depth, dtype="<u2"), meta, depth_path
+
+def _shuffle16(values):
+    return values.view(np.uint8).reshape(-1, 2).T.copy().tobytes()
+
+def _packDepthContainer(compressed_payload, db_meta):
+    container_meta = db_meta.copy()
+    container_meta["container"] = {
+        "format": "opencap_depth_db",
+        "version": 1,
+        "header": "json",
+        "payload": "zstd",
+    }
+    header = json.dumps(container_meta, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return DEPTH_CONTAINER_MAGIC + struct.pack("<Q", len(header)) + header + compressed_payload
+
+def _compressDepthForDB(metadata_path):
+    try:
+        import zstandard as zstd
+    except ImportError as exc:
+        raise ImportError("Missing dependency for LiDAR depth compression: pip install zstandard") from exc
+
+    depth, source_meta, depth_path = _loadDepthFrames(metadata_path)
+    delta = np.empty_like(depth)
+    delta[:, 0, :] = depth[:, 0, :]
+    delta[:, 1:, :] = depth[:, 1:, :] - depth[:, :-1, :]
+    payload = _shuffle16(delta)
+    compressed = zstd.ZstdCompressor(level=DEPTH_DB_LEVEL).compress(payload)
+
+    db_meta = {
+        "codec": "zstd",
+        "level": DEPTH_DB_LEVEL,
+        "transform": DEPTH_DB_TRANSFORM,
+        "dtype": "uint16_le",
+        "width": int(depth.shape[2]),
+        "height": int(depth.shape[1]),
+        "frames": int(depth.shape[0]),
+        "unit": source_meta.get("unit", "unknown"),
+        "original_byte_count": int(depth.nbytes),
+        "compressed_byte_count": len(compressed),
+        "source_metadata": source_meta,
+    }
+
+    output_path = os.path.join(os.path.dirname(metadata_path), "depth_db.depthz")
+    with open(output_path, "wb") as f:
+        f.write(_packDepthContainer(compressed, db_meta))
+
+    os.remove(depth_path)
+    os.remove(metadata_path)
+    return output_path
+
+def _compressLidarDepthFiles(folder):
+    metadata_paths = glob.glob(os.path.join(folder, "**", "depth_metadata.json"), recursive=True)
+    for metadata_path in metadata_paths:
+        output_path = _compressDepthForDB(metadata_path)
+        print("Compressed LiDAR depth for DB upload: {}".format(output_path))
+    return len(metadata_paths)
+
+def _findSingleCameraMatrixCsv(folder):
+    csv_paths = glob.glob(os.path.join(folder, "**", "camera_matrix.csv"), recursive=True)
+    if len(csv_paths) == 0:
+        return None
+    if len(csv_paths) > 1:
+        raise Exception("Multiple camera_matrix.csv files found in LiDAR zip bundle: {}".format(csv_paths))
+    return csv_paths[0]
+
+def _copyLidarCameraMatrixCsv(extract_dir, video_path):
+    csv_path = _findSingleCameraMatrixCsv(extract_dir)
+    if csv_path is None:
+        print("No camera_matrix.csv found in LiDAR zip bundle.")
+        return None
+
+    output_path = os.path.join(os.path.dirname(video_path), "camera_matrix.csv")
+    shutil.copyfile(csv_path, output_path)
+    return output_path
+
+def _downloadLidarResultCameraMatrixCsv(video, video_path, trial_id):
+    trial = getTrialJson(trial_id)
+    matching_results = [
+        result for result in trial["results"]
+        if result["tag"] == "lidar_data"
+        and result.get("device_id") == video.get("device_id")
+        and result.get("media")
+    ]
+    if len(matching_results) == 0:
+        print("No lidar_data trial result found for device_id {}.".format(video.get("device_id")))
+        return None
+
+    zip_path = os.path.splitext(video_path)[0] + "_lidar_data.zip"
+    extract_dir = os.path.splitext(zip_path)[0]
+
+    try:
+        download_file(matching_results[0]["media"], zip_path)
+        if not zipfile.is_zipfile(zip_path):
+            print("lidar_data result for device_id {} is not a zip file.".format(video.get("device_id")))
+            return None
+        if os.path.exists(extract_dir):
+            shutil.rmtree(extract_dir)
+        os.makedirs(extract_dir, exist_ok=True)
+        _safeExtractZip(zip_path, extract_dir)
+        return _copyLidarCameraMatrixCsv(extract_dir, video_path)
+    finally:
+        if os.path.exists(extract_dir):
+            shutil.rmtree(extract_dir)
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+
 def updateVideoFileInAPI(video, video_path):
     if 'id' not in video:
         raise Exception('Cannot update video file in API because the video JSON has no id.')
@@ -187,7 +364,7 @@ def updateVideoFileInAPI(video, video_path):
 
     raise last_error
 
-def downloadVideoFile(video, video_path, trial_id):
+def downloadVideoFile(video, video_path, trial_id, use_lidar_intrinsics=False):
     if not hasLidarData(video):
         download_file(video["video"], video_path)
         return
@@ -201,6 +378,8 @@ def downloadVideoFile(video, video_path, trial_id):
         if os.path.exists(video_path):
             os.remove(video_path)
         shutil.move(zip_path, video_path)
+        if use_lidar_intrinsics:
+            _downloadLidarResultCameraMatrixCsv(video, video_path, trial_id)
         return
 
     if os.path.exists(extract_dir):
@@ -213,6 +392,9 @@ def downloadVideoFile(video, video_path, trial_id):
     if os.path.exists(video_path):
         os.remove(video_path)
     shutil.move(mov_path, video_path)
+    if use_lidar_intrinsics:
+        _copyLidarCameraMatrixCsv(extract_dir, video_path)
+    _compressLidarDepthFiles(extract_dir)
 
     updateVideoFileInAPI(video, video_path)
 
@@ -226,6 +408,16 @@ def downloadVideoFile(video, video_path, trial_id):
 
     shutil.rmtree(extract_dir)
     os.remove(zip_path)
+
+def downloadUnmappedLidarVideoFile(video, trial_id):
+    temp_dir = tempfile.mkdtemp(prefix='opencap_lidar_')
+    video_path = os.path.join(temp_dir, '{}.mov'.format(trial_id))
+
+    try:
+        downloadVideoFile(video, video_path, trial_id)
+    finally:
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
 
 def getTrialJson(trial_id):
     response = makeRequestWithRetry('GET',
@@ -353,7 +545,8 @@ def downloadVideosFromServer(session_id,trial_id, isDocker=True,
             for k, video in enumerate(trial["videos"]):
                 os.makedirs(os.path.join(session_path, "Videos", "Cam{}".format(k), "InputMedia", trial_name), exist_ok=True)
                 video_path = os.path.join(session_path, "Videos", "Cam{}".format(k), "InputMedia", trial_name, trial_id + ".mov")
-                downloadVideoFile(video, video_path, trial_id)
+                downloadVideoFile(video, video_path, trial_id,
+                                  use_lidar_intrinsics=isCalibration)
                 mappingCamDevice[video["device_id"].replace('-', '').upper()] = k
             with open(os.path.join(session_path, "Videos", 'mappingCamDevice.pickle'), 'wb') as handle:
                 pickle.dump(mappingCamDevice, handle)
@@ -364,7 +557,11 @@ def downloadVideosFromServer(session_id,trial_id, isDocker=True,
                 device_id = video["device_id"].replace('-', '').upper()
                 if device_id not in mappingCamDevice:
                     if not isCalibration:
-                        print('Skipping video with device_id {} because it was not in the calibration camera mapping.'.format(video["device_id"]))
+                        if hasLidarData(video):
+                            print('Processing unmapped LiDAR video with device_id {} outside the local Videos folder.'.format(video["device_id"]))
+                            downloadUnmappedLidarVideoFile(video, trial_id)
+                        else:
+                            print('Skipping video with device_id {} because it was not in the calibration camera mapping.'.format(video["device_id"]))
                         continue
                     raise KeyError(device_id)
                 k = mappingCamDevice[device_id]
@@ -373,7 +570,11 @@ def downloadVideosFromServer(session_id,trial_id, isDocker=True,
                 video_path = os.path.join(videoDir, trial_id + ".mov")
                 if not os.path.exists(video_path):
                     if video['video'] :
-                        downloadVideoFile(video, video_path, trial_id)
+                        downloadVideoFile(video, video_path, trial_id,
+                                          use_lidar_intrinsics=isCalibration)
+                elif (isCalibration and hasLidarData(video) and
+                      not os.path.exists(os.path.join(videoDir, "camera_matrix.csv"))):
+                    _downloadLidarResultCameraMatrixCsv(video, video_path, trial_id)
     
         # Import and save metadata
         sessionYamlPath = os.path.join(session_path, "sessionMetadata.yaml")

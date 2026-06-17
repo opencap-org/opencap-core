@@ -26,6 +26,7 @@ from utilsChecker import triangulateMultiviewVideo
 from utilsChecker import writeTRCfrom3DKeypoints
 from utilsChecker import popNeutralPoseImages
 from utilsChecker import rotateIntrinsics
+from utilsChecker import loadLidarIntrinsicMatrix
 from utilsSync import synchronizeVideos
 from utilsDetector  import runPoseDetector
 from utilsAugmenter import augmentTRC
@@ -217,10 +218,13 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
         loadedCamParams = {}
         for camName in cameraDirectories:
             camDir = cameraDirectories[camName]
+            lidarIntrinsicPath = os.path.join(camDir, 'InputMedia', trialName,
+                                              'camera_matrix.csv')
+            hasLidarIntrinsics = os.path.exists(lidarIntrinsicPath)
             # Intrinsics ######################################################
             # Intrinsics and extrinsics already exist for this session.
             if os.path.exists(
-                    os.path.join(camDir,"cameraIntrinsicsExtrinsics.pickle")):
+                    os.path.join(camDir,"cameraIntrinsicsExtrinsics.pickle")) and not hasLidarIntrinsics:
                 logging.info("Load extrinsics for {} - already existing".format(
                     camName))
                 CamParams = loadCameraParameters(
@@ -240,7 +244,10 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
                 if os.path.exists(permIntrinsicDir):
                     CamParams = loadCameraParameters(
                         os.path.join(permIntrinsicDir,
-                                      'cameraIntrinsics.pickle'))                    
+                                      'cameraIntrinsics.pickle'))
+                    if hasLidarIntrinsics:
+                        CamParams['intrinsicMat'] = loadLidarIntrinsicMatrix(lidarIntrinsicPath)
+                        logging.info("Using LiDAR camera_matrix.csv intrinsics for {}".format(camName))
                 # Intrinsics do not exist throw an error. Eventually the
                 # webapp will give you the opportunity to compute them.
                 
