@@ -284,6 +284,15 @@ def saveCameraParameters(filename,CameraParams):
     
     return True
 
+def loadLidarIntrinsicMatrix(cameraMatrixPath):
+    intrinsicMat = np.loadtxt(cameraMatrixPath, delimiter=',')
+    if intrinsicMat.shape != (3, 3):
+        raise Exception("LiDAR camera_matrix.csv must contain a 3x3 matrix.")
+
+    intrinsicMat = intrinsicMat.astype(np.float64)
+    intrinsicMat[0, 2], intrinsicMat[1, 2] = intrinsicMat[1, 2], intrinsicMat[0, 2]
+    return intrinsicMat
+    
 #%% 
 def getVideoRotation(videoPath):
     
