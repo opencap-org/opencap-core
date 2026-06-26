@@ -429,14 +429,15 @@ def calcExtrinsics(imageFileName, CameraParams, CheckerBoardParams,
                 grayColor, CheckerBoardParams['dimensions'],  
                 cv2.CALIB_CB_ADAPTIVE_THRESH) 
 
-    # Fallback: if the standard detector fails, try the SB variant (more robust to
-    # certain lighting/contrast conditions where adaptive thresholding struggles).
-    # Using ACCURACY|LARGER without EXHAUSTIVE to keep the fallback reasonably fast.
+    # Fallback: if the standard detector fails, try the SB variant. EXHAUSTIVE
+    # recovers hard checkerboard views that the lighter SB path can miss.
     corners2_from_sb = False
     if not ret:
         ret_sb, corners_sb, _ = cv2.findChessboardCornersSBWithMeta(
             grayColor, CheckerBoardParams['dimensions'],
-            cv2.CALIB_CB_ACCURACY | cv2.CALIB_CB_LARGER)
+            cv2.CALIB_CB_ACCURACY
+            | cv2.CALIB_CB_LARGER
+            | cv2.CALIB_CB_EXHAUSTIVE)
         if ret_sb:
             ret = True
             corners = corners_sb
