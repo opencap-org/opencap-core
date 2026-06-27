@@ -64,6 +64,8 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
     # Set to False to only generate the json files (default is True).
     # This speeds things up and saves storage space.
     generateVideo = True
+    # Set to True to generate interactive 2D keypoint plots during synchronization.
+    visualizeKeypointPlots = True
     # This is a hack to handle a mismatch between the use of mmpose and hrnet,
     # and between the use of OpenPose and openpose.
     if poseDetector == 'hrnet':
@@ -405,6 +407,7 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
                     imageBasedTracker=False, cams2Use=camerasToUse_c, 
                     poseDetector=poseDetector, trialName=trialName,
                     resolutionPoseDetection=resolutionPoseDetection,
+                    visualizeKeypointAnimation=visualizeKeypointPlots,
                     syncVer=syncVer))
         except Exception as e:
             if len(e.args) == 2: # specific exception

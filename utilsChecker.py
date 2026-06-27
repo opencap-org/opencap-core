@@ -1657,37 +1657,40 @@ def loadPklVideo(pklPath, videoFullPath, imageBasedTracker=False, poseDetector='
     # Creates a browser animation of the data in each person detected. This
     # may not be continuous yet. That happens later with person tracking.
     if visualizeKeypointAnimation:
-        import plotly.express as px
-        import plotly.io as pio
-        pio.renderers.default = 'browser'
-    
-        for i,data in enumerate(allPeople):
+        try:
+            import plotly.express as px
+            import plotly.io as pio
+            pio.renderers.default = 'browser'
+        except ImportError:
+            logging.warning('Plotly is not installed; skipping keypoint animation plots.')
+        else:
+            for i,data in enumerate(allPeople):
+                
+                # Remove the selected columns from 'data'
+                data = np.delete(data, np.s_[2::3], axis=1)        
+                data = data.reshape(nFrames, 25, 2).transpose(1, 0, 2)
             
-            # Remove the selected columns from 'data'
-            data = np.delete(data, np.s_[2::3], axis=1)        
-            data = data.reshape(nFrames, 25, 2).transpose(1, 0, 2)
+                nPoints,nFrames,_ = data.shape
+                # Reshape the 3D numpy array to 2D, preserving point and frame indices
+                data_reshaped = np.copy(data).reshape(-1, 2)
         
-            nPoints,nFrames,_ = data.shape
-            # Reshape the 3D numpy array to 2D, preserving point and frame indices
-            data_reshaped = np.copy(data).reshape(-1, 2)
-    
-            # Create DataFrame
-            df = pd.DataFrame(data_reshaped, columns=['x', 'y'])
-    
-            # Add columns for point number and frame number
-            df['Point'] = np.repeat(np.arange(nPoints), nFrames)
-            df['Frame'] = np.tile(np.arange(nFrames), nPoints)
-    
-            # Reorder columns if needed
-            df = df[['Point', 'Frame', 'x', 'y']]
-    
-            # Create a figure and add an animated scatter plot
-            fig = px.scatter(df,x='x', y='y', title=videoFullPath + ' Box ' + str(i),
-                              animation_frame='Frame',
-                              range_x=[0, 1200], range_y=[1200,0])
-    
-            # Show the animation
-            fig.show()   
+                # Create DataFrame
+                df = pd.DataFrame(data_reshaped, columns=['x', 'y'])
+        
+                # Add columns for point number and frame number
+                df['Point'] = np.repeat(np.arange(nPoints), nFrames)
+                df['Frame'] = np.tile(np.arange(nFrames), nPoints)
+        
+                # Reorder columns if needed
+                df = df[['Point', 'Frame', 'x', 'y']]
+        
+                # Create a figure and add an animated scatter plot
+                fig = px.scatter(df,x='x', y='y', title=videoFullPath + ' Box ' + str(i),
+                                  animation_frame='Frame',
+                                  range_x=[0, 1200], range_y=[1200,0])
+        
+                # Show the animation
+                fig.show()
  
     # Track People, or if only one person, skip tracking
     if len(allPeople) >1: 

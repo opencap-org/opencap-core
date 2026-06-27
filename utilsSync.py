@@ -67,7 +67,8 @@ def synchronizeVideos(CameraDirectories, trialRelativePath, pathPoseDetector,
         ppPklPath = os.path.join(pathOutputPkl, trialPrefix+'_rotated_pp.pkl')
         key2D, confidence = loadPklVideo(
             ppPklPath, videoFullPath, imageBasedTracker=imageBasedTracker,
-            poseDetector=poseDetector,confidenceThresholdForBB=0.3)
+            poseDetector=poseDetector,confidenceThresholdForBB=0.3,
+            visualizeKeypointAnimation=visualizeKeypointAnimation)
         thisVideo = cv2.VideoCapture(videoFullPath.replace('.mov', '_rotated.avi'))
         frameRate = np.round(thisVideo.get(cv2.CAP_PROP_FPS))        
         if key2D.shape[1] == 0 and confidence.shape[1] == 0:
@@ -90,34 +91,37 @@ def synchronizeVideos(CameraDirectories, trialRelativePath, pathPoseDetector,
 
     # Creates a web animation for each camera's keypoints. For debugging.
     if visualizeKeypointAnimation:
-        import plotly.express as px
-        import plotly.io as pio
-        pio.renderers.default = 'browser'
-    
-        for i,data in enumerate(pointList):
+        try:
+            import plotly.express as px
+            import plotly.io as pio
+            pio.renderers.default = 'browser'
+        except ImportError:
+            logging.warning('Plotly is not installed; skipping keypoint animation plots.')
+        else:
+            for i,data in enumerate(pointList):
+            
+                nPoints,nFrames,_ = data.shape
+                # Reshape the 3D numpy array to 2D, preserving point and frame indices
+                data_reshaped = np.copy(data).reshape(-1, 2)
         
-            nPoints,nFrames,_ = data.shape
-            # Reshape the 3D numpy array to 2D, preserving point and frame indices
-            data_reshaped = np.copy(data).reshape(-1, 2)
-    
-            # Create DataFrame
-            df = pd.DataFrame(data_reshaped, columns=['x', 'y'])
-    
-            # Add columns for point number and frame number
-            df['Point'] = np.repeat(np.arange(nPoints), nFrames)
-            df['Frame'] = np.tile(np.arange(nFrames), nPoints)
-    
-            # Reorder columns if needed
-            df = df[['Point', 'Frame', 'x', 'y']]
-               
-            # Create a figure and add an animated scatter plot
-            fig = px.scatter(df,x='x', y='y', title="Cam " + str(i),
-                              animation_frame='Frame',
-                              range_x=[0, 1200], range_y=[1200,0],
-                              color='Point', color_continuous_scale=px.colors.sequential.Viridis)
-    
-            # Show the animation
-            fig.show()
+                # Create DataFrame
+                df = pd.DataFrame(data_reshaped, columns=['x', 'y'])
+        
+                # Add columns for point number and frame number
+                df['Point'] = np.repeat(np.arange(nPoints), nFrames)
+                df['Frame'] = np.tile(np.arange(nFrames), nPoints)
+        
+                # Reorder columns if needed
+                df = df[['Point', 'Frame', 'x', 'y']]
+                   
+                # Create a figure and add an animated scatter plot
+                fig = px.scatter(df,x='x', y='y', title="Cam " + str(i),
+                                  animation_frame='Frame',
+                                  range_x=[0, 1200], range_y=[1200,0],
+                                  color='Point', color_continuous_scale=px.colors.sequential.Viridis)
+        
+                # Show the animation
+                fig.show()
 
     # Synchronize keypoints.
     pointList, confList, nansInOutList,startEndFrameList = synchronizeVideoKeypoints(
