@@ -44,7 +44,8 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
          dataDir=None, overwriteAugmenterModel=False,
          filter_frequency='default', overwriteFilterFrequency=False,
          scaling_setup='upright_standing_pose', overwriteScalingSetup=False,
-         overwriteCamerasToUse=False, syncVer=None,):
+         overwriteCamerasToUse=False, syncVer=None,
+         useLidarIntrinsics=False,):
 
     # %% High-level settings.
     # Camera calibration.
@@ -220,7 +221,8 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
             camDir = cameraDirectories[camName]
             lidarIntrinsicPath = os.path.join(camDir, 'InputMedia', trialName,
                                               'camera_matrix.csv')
-            hasLidarIntrinsics = os.path.exists(lidarIntrinsicPath)
+            hasLidarIntrinsics = (
+                useLidarIntrinsics and os.path.exists(lidarIntrinsicPath))
             # Intrinsics ######################################################
             # Intrinsics and extrinsics already exist for this session.
             if os.path.exists(
