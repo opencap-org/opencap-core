@@ -508,7 +508,6 @@ def calcExtrinsics(imageFileName, CameraParams, CheckerBoardParams,
     # certain lighting/contrast conditions where adaptive thresholding struggles).
     # Using ACCURACY|LARGER without EXHAUSTIVE to keep the fallback reasonably fast.
     corners2_from_sb = False
-    ret=False
     if not ret:
         ret_sb, corners_sb, _ = cv2.findChessboardCornersSBWithMeta(
             grayColor, CheckerBoardParams['dimensions'],
