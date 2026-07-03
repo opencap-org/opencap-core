@@ -19,6 +19,7 @@ from scipy.signal import sosfiltfilt, butter, find_peaks
 from scipy.interpolate import pchip_interpolate
 from scipy.spatial.transform import Rotation 
 from itertools import combinations
+from numpy.lib.stride_tricks import sliding_window_view
 import copy
 from utilsCameraPy3 import Camera, nview_linear_triangulations
 from utils import getOpenPoseMarkerNames, getOpenPoseFaceMarkers
@@ -273,6 +274,80 @@ def generate3Dgrid(CheckerBoardParams):
     
     return objectp3d
 
+
+def warpChessboardToCanonicalView(img, corners, pattern, squareResolution=1):
+    width, height = pattern[:2]
+    canonicalCorners = np.array([
+        [0.5, 0.5],
+        [width - 0.5, 0.5],
+        [width - 0.5, height - 0.5],
+        [0.5, height - 0.5]
+    ])
+    canonicalCorners = (canonicalCorners + 0.5) * squareResolution - 0.5
+
+    imageCorners = corners[[0,
+                            width - 1,
+                            (height - 1) * width + width - 1,
+                            (height - 1) * width]].reshape(-1, 2)
+    homography, _ = cv2.findHomography(imageCorners,
+                                       canonicalCorners.reshape(-1, 2))
+    if homography is None:
+        return None
+
+    return cv2.warpPerspective(
+        img,
+        homography,
+        ((width + 1) * squareResolution, (height + 1) * squareResolution),
+        flags=cv2.INTER_NEAREST)
+
+
+def needsCornerOrderFlip(canonicalImage, squareResolution=1):
+    if canonicalImage.ndim == 3:
+        normalizedImage = (canonicalImage / 255.0).mean(-1)
+    else:
+        normalizedImage = canonicalImage / 255.0
+
+    normalizedImage = sliding_window_view(
+        normalizedImage, (squareResolution, squareResolution)).mean((-1, -2))
+
+    def signOfDeterminant(i, j):
+        return np.sign(normalizedImage[i, j] * normalizedImage[i + 1, j + 1] -
+                       normalizedImage[i, j + 1] * normalizedImage[i + 1, j])
+
+    height, width = normalizedImage.shape[:2]
+    cornerSigns = (
+        signOfDeterminant(0, 0),
+        signOfDeterminant(0, width - 2),
+        signOfDeterminant(height - 2, width - 2),
+        signOfDeterminant(height - 2, 0))
+
+    if sum(cornerSigns) != 0:
+        return None, "Pattern not identified correctly, or not an asymmetric pattern"
+
+    return cornerSigns[0] > 0, None
+
+
+def ensureCornerOrdering(img, corners, pattern, squareResolution=1):
+    # Requires an asymmetric pattern, i.e. exactly one pattern dimension is odd.
+    if (pattern[0] % 2 == 0) == (pattern[1] % 2 == 0):
+        return corners, False, "Cannot ensure SB checkerboard ordering without an asymmetric pattern"
+
+    canonicalImage = warpChessboardToCanonicalView(
+        img, corners, pattern, squareResolution=squareResolution)
+    if canonicalImage is None:
+        return corners, False, "Could not compute checkerboard homography"
+
+    needsFlip, errorMessage = needsCornerOrderFlip(
+        canonicalImage, squareResolution=squareResolution)
+    if errorMessage is not None:
+        return corners, False, errorMessage
+
+    if needsFlip:
+        print('flipped corners for extrinsics')
+        corners = corners[::-1]
+
+    return corners, True, None
+
 # %%
 def saveCameraParameters(filename,CameraParams):
     if not os.path.exists(os.path.dirname(filename)):
@@ -436,11 +511,17 @@ def calcExtrinsics(imageFileName, CameraParams, CheckerBoardParams,
     if not ret:
         ret_sb, corners_sb, _ = cv2.findChessboardCornersSBWithMeta(
             grayColor, CheckerBoardParams['dimensions'],
-            cv2.CALIB_CB_ACCURACY | cv2.CALIB_CB_LARGER)
+                cv2.CALIB_CB_ACCURACY | cv2.CALIB_CB_LARGER)
         if ret_sb:
             ret = True
-            corners = corners_sb
-            corners2_from_sb = True
+            corners, orderingSuccess, orderingError = ensureCornerOrdering(
+                grayColor, corners_sb, CheckerBoardParams['dimensions'],
+                squareResolution=2)
+            if orderingSuccess:
+                corners2_from_sb = True
+            else:
+                print('Rejected SB checkerboard detection: ' + orderingError)
+                ret = False
 
     # If desired number of corners can be detected then, 
     # refine the pixel coordinates and display 
