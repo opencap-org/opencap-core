@@ -55,12 +55,7 @@ API_TOKEN = getToken()
 # Enter the identifier(s) of the session(s) you want to reprocess. This is a list of one
 # or more session identifiers. The identifier is found as the 36-character string at the
 # end of the session url: app.opencap.ai/session/<session_id>
-session_ids = ['0a9d564d-8fe3-4d9d-9946-d36529ffb122', # degenerate at conf
-                '1dfd1ef5-7724-48a5-b3d5-8809b88764e1', # horiz black upper left
-                '0a60a367-e5a3-4f34-b052-a5a11ab84195', # horiz white upper left
-                '8784cae6-0508-4698-bac4-b9c8f2d72f41', # vert white upper left
-                'a9aa74d0-34dc-462b-883d-bf6b35f19509' # vert black upper left
-               ]
+session_ids = ['23d52d41-69fe-47cf-8b60-838e4268dd50']
 
 
 # Select which trials to reprocess. You can reprocess all trials in the session 
