@@ -512,7 +512,7 @@ def calcExtrinsics(imageFileName, CameraParams, CheckerBoardParams,
     if not ret:
         ret_sb, corners_sb, _ = cv2.findChessboardCornersSBWithMeta(
             grayColor, CheckerBoardParams['dimensions'],
-                cv2.CALIB_CB_ACCURACY | cv2.CALIB_CB_LARGER)
+                cv2.CALIB_CB_ACCURACY | cv2.CALIB_CB_LARGER | cv2.CALIB_CB_EXHAUSTIVE)
         if ret_sb:
             ret = True
             corners, orderingSuccess, orderingError = ensureCornerOrdering(
