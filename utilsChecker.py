@@ -274,7 +274,8 @@ def generate3Dgrid(CheckerBoardParams):
     
     return objectp3d
 
-
+# codex implementation of this https://github.com/opencv/opencv/issues/22083#issuecomment-2354470395
+# to identify where the black corner is on an asymmetrical chessboard
 def warpChessboardToCanonicalView(img, corners, pattern, squareResolution=1):
     width, height = pattern[:2]
     canonicalCorners = np.array([
