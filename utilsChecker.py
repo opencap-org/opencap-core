@@ -452,6 +452,7 @@ def calcExtrinsics(imageFileName, CameraParams, CheckerBoardParams,
     
     #  3D points real world coordinates. Assuming z=0
     objectp3d = generate3Dgrid(CheckerBoardParams)
+    detectedCheckerBoardParams = CheckerBoardParams
     
     # Load and resize image - remember calibration image res needs to be same as all processing
     image = cv2.imread(imageFileName)
@@ -510,16 +511,24 @@ def calcExtrinsics(imageFileName, CameraParams, CheckerBoardParams,
     # Using ACCURACY|LARGER without EXHAUSTIVE to keep the fallback reasonably fast.
     corners2_from_sb = False
     if not ret:
-        ret_sb, corners_sb, _ = cv2.findChessboardCornersSBWithMeta(
+        ret_sb, corners_sb, meta_sb = cv2.findChessboardCornersSBWithMeta(
             grayColor, CheckerBoardParams['dimensions'],
                 cv2.CALIB_CB_ACCURACY | cv2.CALIB_CB_LARGER | cv2.CALIB_CB_EXHAUSTIVE)
         if ret_sb:
+            detectedDimensions = meta_sb.shape[::-1]
+            checkerCopy = copy.copy(CheckerBoardParams)
+            checkerCopy['dimensions'] = detectedDimensions
+            detectedCheckerBoardParams = checkerCopy
+            objectp3d = generate3Dgrid(detectedCheckerBoardParams)
             ret = True
             corners, orderingSuccess, orderingError = ensureCornerOrdering(
-                grayColor, corners_sb, CheckerBoardParams['dimensions'],
+                grayColor, corners_sb, detectedCheckerBoardParams['dimensions'],
                 squareResolution=2)
             if orderingSuccess:
                 corners2_from_sb = True
+                if tuple(detectedDimensions) != tuple(CheckerBoardParams['dimensions']):
+                    print('Detected checkerboard dimensions {} instead of input dimensions {}.'.format(
+                        detectedDimensions, CheckerBoardParams['dimensions']))
             else:
                 print('Rejected SB checkerboard detection: ' + orderingError)
                 ret = False
@@ -544,7 +553,7 @@ def calcExtrinsics(imageFileName, CameraParams, CheckerBoardParams,
   
         # For testing: Draw and display the corners 
         # image = cv2.drawChessboardCorners(image,  
-        #                                  CheckerBoardParams['dimensions'],  
+        #                                  detectedCheckerBoardParams['dimensions'],
         #                                   corners2, ret) 
         # Draw small dots instead
         # Choose dot size based on size of squares in pixels
