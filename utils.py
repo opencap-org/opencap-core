@@ -855,10 +855,11 @@ def getNeutralTrialID(session_id):
     
     if len(neutral_ids)>0:
         neutralID = neutral_ids[-1]
-    elif session['meta']['neutral_trial']:
-        neutralID = session['meta']['neutral_trial']['id']
     else:
-        raise Exception('No neutral trial in session.')
+        neutral_trial = (session.get('meta') or {}).get('neutral_trial')
+        if not neutral_trial:
+            raise Exception('No neutral trial in session.')
+        neutralID = neutral_trial['id']
     
     return neutralID       
 
@@ -893,6 +894,8 @@ def getCalibration(session_id,session_path,trial_type='dynamic',getCalibrationOp
     # download the mapping
     videoFolder = os.path.join(session_path,'Videos')
     os.makedirs(videoFolder, exist_ok=True)
+    if 'camera_mapping' not in calibResultTags:
+        raise Exception('Calibration is missing camera mapping results. Redo calibration before processing dynamic trials.')
     mapURL = trial['results'][calibResultTags.index('camera_mapping')]['media']
     mapLocalPath = os.path.join(videoFolder,'mappingCamDevice.pickle')
     download_file(mapURL,mapLocalPath)
@@ -2121,4 +2124,3 @@ def makeRequestWithRetry(method, url,
                                     files=files)
     response.raise_for_status()
     return response
-
