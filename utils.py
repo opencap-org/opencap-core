@@ -980,10 +980,8 @@ def changeSessionMetadata(session_ids,newMetaDict):
         existingMeta = session['meta']
         
         # Check if framerate is in metadata. If not, set to 60
-        if 'framerate' not in existingMeta:
-            framerate = 60
-        else:
-            framerate = existingMeta['framerate']
+        framerate = existingMeta.get('settings', {}).get(
+            'framerate', existingMeta.get('framerate', 60))
         if 'filterfrequency' in newMetaDict:
             if newMetaDict['filterfrequency'] != 'default':
                 if float(newMetaDict['filterfrequency']) > framerate/2:
@@ -2121,4 +2119,3 @@ def makeRequestWithRetry(method, url,
                                     files=files)
     response.raise_for_status()
     return response
-
