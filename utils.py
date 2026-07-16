@@ -28,6 +28,8 @@ from utilsAPI import getAPIURL
 
 API_URL = getAPIURL()
 API_TOKEN = getToken()
+DEFAULT_REQUEST_TIMEOUT = (10, 10)
+UPLOAD_REQUEST_TIMEOUT = (10, 300)
 DEPTH_DB_LEVEL = 10
 DEPTH_DB_TRANSFORM = "vertical_delta_shuffle16"
 DEPTH_CONTAINER_MAGIC = b"OCDEPTHDB1\n"
@@ -122,7 +124,8 @@ def uploadFileToS3(filePath):
         makeRequestWithRetry('POST',
                              r['url'],
                              data=r['fields'],
-                             files=files)
+                             files=files,
+                             timeout=UPLOAD_REQUEST_TIMEOUT)
 
     return r['fields']['key']
 
@@ -2086,7 +2089,8 @@ def postProcessedDuration(trial_url, duration):
 # utils for common HTTP requests
 def makeRequestWithRetry(method, url,
                          headers=None, data=None, params=None, files=None,
-                         retries=5, backoff_factor=1):
+                         retries=5, backoff_factor=1,
+                         timeout=DEFAULT_REQUEST_TIMEOUT):
     """
     Makes an HTTP request with retry logic and returns the Response object.
 
@@ -2099,6 +2103,8 @@ def makeRequestWithRetry(method, url,
         params (dict): URL query parameters.
         retries (int): Number of retry attempts.
         backoff_factor (float): Backoff factor for exponential delays.
+        timeout (float or tuple): Seconds to wait for connection/response
+            activity, as accepted by requests.Session().request().
 
     Returns:
         requests.Response: The response object for further processing.
@@ -2118,7 +2124,7 @@ def makeRequestWithRetry(method, url,
                                     headers=headers,
                                     data=data,
                                     params=params,
-                                    files=files)
+                                    files=files,
+                                    timeout=timeout)
     response.raise_for_status()
     return response
-
