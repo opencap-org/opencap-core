@@ -7,17 +7,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-thisDir = os.path.dirname(os.path.realpath(__file__))
-repoDir = os.path.abspath(os.path.join(thisDir, '../'))
-sys.path.append(repoDir)
+from conftest import CALIBRATION_FIXTURE_DIR, REPO_DIR, TEST_DATA_ROOT
+
+sys.path.append(REPO_DIR)
 from main import main
 
-CALIBRATION_FIXTURE_DIR = os.path.join(
-    thisDir,
-    'opencap-test-data',
-    'Data',
-    'calibration-fixtures',
-)
 LABVALIDATION_CALIBRATION_VIDEOS = {
     'Cam0': os.path.join(
         CALIBRATION_FIXTURE_DIR,
@@ -172,7 +166,7 @@ def test_main(trialName, t0, tf, syncVer, caplog):
 
     sessionName = 'sync_2-cameras'
     trialID = trialName
-    dataDir = os.path.join(thisDir, 'opencap-test-data')
+    dataDir = TEST_DATA_ROOT
     main(
         sessionName,
         trialName,

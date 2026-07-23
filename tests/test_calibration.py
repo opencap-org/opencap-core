@@ -8,10 +8,11 @@ import pytest
 
 os.environ.setdefault('API_TOKEN', 'test-token')
 
-thisDir = os.path.dirname(os.path.realpath(__file__))
-repoDir = os.path.abspath(os.path.join(thisDir, '../'))
-sys.path.append(repoDir)
+from conftest import CALIBRATION_FIXTURE_DIR, REPO_DIR
 
+sys.path.append(REPO_DIR)
+
+import utilsChecker
 from utilsChecker import (
     calcExtrinsicsFromVideo,
     generate3Dgrid,
@@ -20,7 +21,9 @@ from utilsChecker import (
 )
 
 
-STANDARD_CHECKERBOARD_PARAMS = {
+# ---- Checkerboard / fixture constants ----
+
+DEFAULT_CHECKERBOARD_PARAMS = {
     'dimensions': (5, 4),
     'squareSize': 35.0,
 }
@@ -30,19 +33,7 @@ LABVALIDATION_CHECKERBOARD_PARAMS = {
 }
 MAX_MEAN_REPROJECTION_ERROR_PX = 0.5
 
-ORIGINAL_FIND_CHESSBOARD_CORNERS = cv2.findChessboardCorners
-ORIGINAL_FIND_CHESSBOARD_CORNERS_SB_WITH_META = cv2.findChessboardCornersSBWithMeta
-ORIGINAL_CORNER_SUB_PIX = cv2.cornerSubPix
 
-CALIBRATION_FIXTURE_DIR = os.path.join(
-    thisDir,
-    'opencap-test-data',
-    'Data',
-    'calibration-fixtures',
-)
-IPHONE13_MODEL = 'iPhone13,3'
-IPHONE17_1_MODEL = 'iPhone17,1'
-IPHONE17_3_MODEL = 'iPhone17,3'
 INTRINSICS_FOLDER = 'Deployed'
 
 ACL_EXHAUSTIVE_FALLBACK_VIDEO = os.path.join(
@@ -51,7 +42,7 @@ ACL_EXHAUSTIVE_FALLBACK_VIDEO = os.path.join(
     'exhaustive_fallback_success',
     'acl_exhaustive_only_success.qt',
 )
-UTAH_PRODUCTION_VIDEO = os.path.join(
+UTAH_FIXTURE_VIDEO = os.path.join(
     CALIBRATION_FIXTURE_DIR,
     'utah',
     'production_success',
@@ -67,8 +58,8 @@ PRIMARY_SUCCESS_FIXTURES = [
             'primary_success',
             'acl_primary_success.qt',
         ),
-        STANDARD_CHECKERBOARD_PARAMS,
-        IPHONE13_MODEL,
+        DEFAULT_CHECKERBOARD_PARAMS,
+        'iPhone13,3',
     ),
     (
         'labvalidation',
@@ -79,7 +70,7 @@ PRIMARY_SUCCESS_FIXTURES = [
             'labvalidation_subject5_session0_cam3_extrinsics.avi',
         ),
         LABVALIDATION_CHECKERBOARD_PARAMS,
-        IPHONE13_MODEL,
+        'iPhone13,3',
     ),
 ]
 
@@ -92,7 +83,7 @@ NEGATIVE_FIXTURES = [
             'no_checkerboard',
             'no_checkerboard_cam0.mov',
         ),
-        IPHONE17_3_MODEL,
+        'iPhone17,3',
     ),
     (
         'no_checkerboard_cam1',
@@ -102,7 +93,7 @@ NEGATIVE_FIXTURES = [
             'no_checkerboard',
             'no_checkerboard_cam1.mov',
         ),
-        IPHONE17_1_MODEL,
+        'iPhone17,1',
     ),
     (
         'partial_checkerboard_cam0',
@@ -112,7 +103,7 @@ NEGATIVE_FIXTURES = [
             'partial_checkerboard',
             'partial_checkerboard_cam0.mov',
         ),
-        IPHONE17_3_MODEL,
+        'iPhone17,3',
     ),
     (
         'partial_checkerboard_cam1',
@@ -122,14 +113,26 @@ NEGATIVE_FIXTURES = [
             'partial_checkerboard',
             'partial_checkerboard_cam1.mov',
         ),
-        IPHONE17_1_MODEL,
+        'iPhone17,1',
     ),
 ]
 
 
+# ---- Unpatched cv2 handles ----
+
+UNPATCHED_CV2_FIND_CHESSBOARD_CORNERS = cv2.findChessboardCorners
+UNPATCHED_CV2_FIND_CHESSBOARD_CORNERS_SB_WITH_META = (
+    cv2.findChessboardCornersSBWithMeta
+)
+UNPATCHED_CV2_CORNER_SUB_PIX = cv2.cornerSubPix
+UNPATCHED_ENSURE_CORNER_ORDERING = utilsChecker.ensureCornerOrdering
+
+
+# ---- Helpers ----
+
 def load_intrinsics(video_path, iphone_model):
     intrinsics_path = os.path.join(
-        repoDir,
+        REPO_DIR,
         'CameraIntrinsics',
         iphone_model,
         INTRINSICS_FOLDER,
@@ -140,14 +143,15 @@ def load_intrinsics(video_path, iphone_model):
 
 
 def input_media_dir(tmp_path):
-    media_dir = (
-        tmp_path
-        / 'Data'
-        / 'test_session'
-        / 'Videos'
-        / 'Cam0'
-        / 'InputMedia'
-        / 'calibration'
+    media_dir = tmp_path.joinpath(
+        os.path.join(
+            'Data',
+            'test_session',
+            'Videos',
+            'Cam0',
+            'InputMedia',
+            'calibration',
+        )
     )
     media_dir.mkdir(parents=True, exist_ok=True)
     return media_dir
@@ -182,6 +186,8 @@ def mean_reproj_error(camera_params, checkerboard_params, corners, image_shape):
     image_width = image_shape[1]
     camera_image_width = float(np.squeeze(camera_params['imageSize'])[1])
     scale = image_width / camera_image_width
+    # Need to scale as detected coreners are potentially from upsampled/downsampled image,
+    # but checking agaisnt original camera intrinsics
     observed_corners = corners / scale
     object_points = generate3Dgrid(checkerboard_params)
     projected_corners, _ = cv2.projectPoints(
@@ -204,52 +210,72 @@ def run_video_calibration(
     iphone_model,
     tmp_path,
     monkeypatch,
-    detector_mode,
+    fallback_enabled=True,
+    fallback_flag_override=None,
 ):
     staged_video_path = stage_video(tmp_path, video_path)
     camera_params = load_intrinsics(staged_video_path, iphone_model)
     calls = {'primary': 0, 'fallback': 0}
-    production_flags = []
-    detector_flags = []
-    detected = {'corners': None, 'image_shape': None}
+    fallback_flags = []
+    # captured_corners stores corners detected by the different methods,
+    # pre and post sub pixel refining for primary path and pre and 
+    # post re-ordering for fallback path
+    captured_corners = {
+        'raw_primary': None,
+        'refined_primary': None,
+        'raw_sb': None,
+        'ordered_sb': None,
+        'image_shape': None,
+    }
 
     def primary_detector(*args, **kwargs):
         calls['primary'] += 1
-        found, corners = ORIGINAL_FIND_CHESSBOARD_CORNERS(*args, **kwargs)
+        found, corners = UNPATCHED_CV2_FIND_CHESSBOARD_CORNERS(*args, **kwargs)
         if found:
-            detected['corners'] = corners.copy()
-            detected['image_shape'] = args[0].shape
+            captured_corners['raw_primary'] = corners.copy()
+            captured_corners['image_shape'] = args[0].shape
         return found, corners
 
+    # fallback_flags records flags across retries, the flags used are always those requested
+    # by prod except for the case where we test the old fallback without exhaustive
     def fallback_detector(image, pattern_size, flags):
         calls['fallback'] += 1
-        production_flags.append(flags)
-        if detector_mode == 'primary_only':
+        if not fallback_enabled:
             return False, None, None
-        if detector_mode == 'current_fallback':
-            flags = sb_flags(exhaustive=False)
-        elif detector_mode == 'exhaustive_fallback':
-            flags = sb_flags(exhaustive=True)
-        detector_flags.append(flags)
-        found, corners, meta = ORIGINAL_FIND_CHESSBOARD_CORNERS_SB_WITH_META(
+        if fallback_flag_override is not None:
+            flags = fallback_flag_override
+        fallback_flags.append(flags)
+        found, corners, meta = UNPATCHED_CV2_FIND_CHESSBOARD_CORNERS_SB_WITH_META(
             image, pattern_size, flags
         )
         if found:
-            detected['corners'] = corners.copy()
-            detected['image_shape'] = image.shape
+            captured_corners['raw_sb'] = corners.copy()
+            captured_corners['image_shape'] = image.shape
         return found, corners, meta
 
+    def ensure_corner_ordering(image, corners, pattern, squareResolution=1):
+        ordered_corners, ordering_success, ordering_error = (
+            UNPATCHED_ENSURE_CORNER_ORDERING(
+                image, corners, pattern, squareResolution=squareResolution
+            )
+        )
+        if ordering_success:
+            captured_corners['ordered_sb'] = ordered_corners.copy()
+            captured_corners['image_shape'] = image.shape
+        return ordered_corners, ordering_success, ordering_error
+
     def corner_subpix(image, corners, win_size, zero_zone, criteria):
-        refined_corners = ORIGINAL_CORNER_SUB_PIX(
+        refined_corners = UNPATCHED_CV2_CORNER_SUB_PIX(
             image, corners, win_size, zero_zone, criteria
         )
-        detected['corners'] = refined_corners.copy()
-        detected['image_shape'] = image.shape
+        captured_corners['refined_primary'] = refined_corners.copy()
+        captured_corners['image_shape'] = image.shape
         return refined_corners
 
     monkeypatch.setattr(cv2, 'findChessboardCorners', primary_detector)
     monkeypatch.setattr(cv2, 'findChessboardCornersSBWithMeta', fallback_detector)
     monkeypatch.setattr(cv2, 'cornerSubPix', corner_subpix)
+    monkeypatch.setattr(utilsChecker, 'ensureCornerOrdering', ensure_corner_ordering)
 
     try:
         result = calcExtrinsicsFromVideo(
@@ -263,11 +289,21 @@ def run_video_calibration(
         if 'checkerboard was not detected' not in str(exc):
             raise
         result = None
-    error = mean_reproj_error(
-        result, checkerboard_params, detected['corners'], detected['image_shape']
+    corners_for_reprojection = (
+        captured_corners['refined_primary']
+        if captured_corners['refined_primary'] is not None
+        else captured_corners['ordered_sb']
     )
-    return result, calls, production_flags, detector_flags, error
+    error = mean_reproj_error(
+        result,
+        checkerboard_params,
+        corners_for_reprojection,
+        captured_corners['image_shape'],
+    )
+    return result, calls, fallback_flags, error
 
+
+# ---- Tests ----
 
 @pytest.mark.parametrize(
     'fixture_name, video_path, checkerboard_params, iphone_model',
@@ -278,13 +314,15 @@ def run_video_calibration(
 def test_primary_fixtures_calibrate(
     fixture_name, video_path, checkerboard_params, iphone_model, tmp_path, monkeypatch
 ):
-    result, calls, production_flags, detector_flags, mean_error = run_video_calibration(
-        video_path,
-        checkerboard_params,
-        iphone_model,
-        tmp_path,
-        monkeypatch,
-        detector_mode='primary_only',
+    result, calls, fallback_flags, mean_error = (
+        run_video_calibration(
+            video_path,
+            checkerboard_params,
+            iphone_model,
+            tmp_path,
+            monkeypatch,
+            fallback_enabled=False,
+        )
     )
 
     assert_extrinsics(result)
@@ -292,21 +330,20 @@ def test_primary_fixtures_calibrate(
         fixture_name,
         mean_error,
     )
-    assert calls['primary'] == 1
+    # These fixtures should pass within the primary detector's resize attempts.
+    assert 1 <= calls['primary'] <= 4
     assert calls['fallback'] == 0
-    assert production_flags == []
-    assert detector_flags == []
+    assert fallback_flags == []
 
 
-# Utah vid should succeed through the production fallback route (and in many cases via primary detector)
-def test_utah_production_calibrates(tmp_path, monkeypatch):
-    result, _, _, _, mean_error = run_video_calibration(
-        UTAH_PRODUCTION_VIDEO,
-        STANDARD_CHECKERBOARD_PARAMS,
-        IPHONE13_MODEL,
+# Utah fixture should calibrate through the exhaustive fallback route when needed.
+def test_utah_fixture_exhaustive(tmp_path, monkeypatch):
+    result, _, _, mean_error = run_video_calibration(
+        UTAH_FIXTURE_VIDEO,
+        DEFAULT_CHECKERBOARD_PARAMS,
+        'iPhone13,3',
         tmp_path,
         monkeypatch,
-        detector_mode='exhaustive_fallback',
     )
 
     assert_extrinsics(result)
@@ -318,47 +355,44 @@ def test_acl_exhaustive_recovery(tmp_path, monkeypatch):
     (
         current_result,
         current_calls,
-        current_production_flags,
-        current_flags,
+        current_fallback_flags,
         _,
     ) = run_video_calibration(
         ACL_EXHAUSTIVE_FALLBACK_VIDEO,
-        STANDARD_CHECKERBOARD_PARAMS,
-        IPHONE13_MODEL,
+        DEFAULT_CHECKERBOARD_PARAMS,
+        'iPhone13,3',
         tmp_path / 'current_fallback',
         monkeypatch,
-        detector_mode='current_fallback',
+        fallback_flag_override=sb_flags(exhaustive=False),
     )
     assert current_result is None
     assert current_calls['fallback'] > 0
-    assert current_production_flags
-    assert current_flags
-    assert not any(flags & cv2.CALIB_CB_EXHAUSTIVE for flags in current_flags)
+    assert current_fallback_flags
+    assert not any(
+        flags & cv2.CALIB_CB_EXHAUSTIVE for flags in current_fallback_flags
+    )
 
     (
         exhaustive_result,
         exhaustive_calls,
-        exhaustive_production_flags,
-        exhaustive_flags,
+        exhaustive_fallback_flags,
         mean_error,
     ) = run_video_calibration(
         ACL_EXHAUSTIVE_FALLBACK_VIDEO,
-        STANDARD_CHECKERBOARD_PARAMS,
-        IPHONE13_MODEL,
+        DEFAULT_CHECKERBOARD_PARAMS,
+        'iPhone13,3',
         tmp_path / 'exhaustive_fallback',
         monkeypatch,
-        detector_mode='exhaustive_fallback',
     )
 
     assert_extrinsics(exhaustive_result)
     assert mean_error < MAX_MEAN_REPROJECTION_ERROR_PX, mean_error
     assert exhaustive_calls['fallback'] > 0
-    assert exhaustive_production_flags
-    assert exhaustive_flags
+    assert exhaustive_fallback_flags
     assert any(
-        flags & cv2.CALIB_CB_EXHAUSTIVE for flags in exhaustive_production_flags
+        flags & cv2.CALIB_CB_EXHAUSTIVE
+        for flags in exhaustive_fallback_flags
     )
-    assert any(flags & cv2.CALIB_CB_EXHAUSTIVE for flags in exhaustive_flags)
 
 
 @pytest.mark.parametrize(
@@ -370,18 +404,17 @@ def test_acl_exhaustive_recovery(tmp_path, monkeypatch):
 def test_negative_fixtures_reject(
     fixture_name, video_path, iphone_model, tmp_path, monkeypatch
 ):
-    result, calls, production_flags, detector_flags, _ = run_video_calibration(
-        video_path,
-        STANDARD_CHECKERBOARD_PARAMS,
-        iphone_model,
-        tmp_path,
-        monkeypatch,
-        detector_mode='exhaustive_fallback',
+    result, calls, fallback_flags, _ = (
+        run_video_calibration(
+            video_path,
+            DEFAULT_CHECKERBOARD_PARAMS,
+            iphone_model,
+            tmp_path,
+            monkeypatch,
+        )
     )
 
     assert result is None, fixture_name
     assert calls['fallback'] > 0
-    assert production_flags
-    assert detector_flags
-    assert all(flags & cv2.CALIB_CB_EXHAUSTIVE for flags in production_flags)
-    assert all(flags & cv2.CALIB_CB_EXHAUSTIVE for flags in detector_flags)
+    assert fallback_flags
+    assert all(flags & cv2.CALIB_CB_EXHAUSTIVE for flags in fallback_flags)
