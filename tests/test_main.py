@@ -1,14 +1,41 @@
 import logging
 import os
+import pickle
+import shutil
 import sys
 import numpy as np
 import pandas as pd
 import pytest
 
-thisDir = os.path.dirname(os.path.realpath(__file__))
-repoDir = os.path.abspath(os.path.join(thisDir, '../'))
-sys.path.append(repoDir)
+from conftest import CALIBRATION_FIXTURE_DIR, REPO_DIR, TEST_DATA_ROOT
+
+sys.path.append(REPO_DIR)
 from main import main
+
+LABVALIDATION_CALIBRATION_VIDEOS = {
+    'Cam0': os.path.join(
+        CALIBRATION_FIXTURE_DIR,
+        'labvalidation',
+        'primary_success',
+        'labvalidation_subject5_session0_cam3_extrinsics.avi',
+    ),
+    'Cam1': os.path.join(
+        CALIBRATION_FIXTURE_DIR,
+        'labvalidation',
+        'e2e_calibration',
+        'labvalidation_subject5_session0_cam4_extrinsics.avi',
+    ),
+}
+LABVALIDATION_CALIBRATION_METADATA = """\
+checkerBoard:
+  black2BlackCornersHeight_n: 8
+  black2BlackCornersWidth_n: 11
+  placement: backWall
+  squareSideLength_mm: 60.0
+iphoneModel:
+  Cam0: iPhone13,3
+  Cam1: iPhone13,3
+"""
 
 # Helper functions to load and compare TRC and MOT files
 def load_trc(file, num_metadata_lines=5):
@@ -74,6 +101,57 @@ def compare_mot(output_mot_df, ref_mot_df, t0, tf):
             rmse = calc_rmse(output_mot_df_slice[col], ref_mot_df_slice[col])
             assert rmse <= 0.5
 
+
+# uses 2 of 5 lab validation videos
+def test_main_calibration(tmp_path):
+    sessionName = 'labvalidation_calibration_2-cameras'
+    trialName = 'calibration'
+    trialID = 'calibration'
+    dataDir = tmp_path
+    sessionDir = os.path.join(dataDir, 'Data', sessionName)
+
+    os.makedirs(sessionDir, exist_ok=True)
+    with open(os.path.join(sessionDir, 'sessionMetadata.yaml'), 'w') as f:
+        f.write(LABVALIDATION_CALIBRATION_METADATA)
+
+    for camName, videoPath in LABVALIDATION_CALIBRATION_VIDEOS.items():
+        mediaDir = os.path.join(
+            sessionDir,
+            'Videos',
+            camName,
+            'InputMedia',
+            trialName,
+        )
+        os.makedirs(mediaDir, exist_ok=True)
+        shutil.copy2(
+            videoPath,
+            os.path.join(mediaDir, f'{trialID}.avi'),
+        )
+
+    main(
+        sessionName,
+        trialName,
+        trialID,
+        dataDir=dataDir,
+        genericFolderNames=True,
+        extrinsicsTrial=True,
+        imageUpsampleFactor=2,
+    )
+
+    for camName in LABVALIDATION_CALIBRATION_VIDEOS:
+        paramsPath = os.path.join(
+            sessionDir,
+            'Videos',
+            camName,
+            'cameraIntrinsicsExtrinsics.pickle',
+        )
+        assert os.path.exists(paramsPath)
+        with open(paramsPath, 'rb') as f:
+            cameraParams = pickle.load(f)
+        assert np.all(np.isfinite(cameraParams['rotation']))
+        assert np.all(np.isfinite(cameraParams['translation']))
+
+
 # End to end tests with different sync methods (hand, gait, general).
 # Also check that syncVer updates with main changes.
 # Note: no pose detection, uses pre-scaled opensim model
@@ -88,7 +166,7 @@ def test_main(trialName, t0, tf, syncVer, caplog):
 
     sessionName = 'sync_2-cameras'
     trialID = trialName
-    dataDir = os.path.join(thisDir, 'opencap-test-data')
+    dataDir = TEST_DATA_ROOT
     main(
         sessionName,
         trialName,
