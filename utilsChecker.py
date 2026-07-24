@@ -194,24 +194,28 @@ def calcIntrinsics(folderName, CheckerBoardParams=None, filenames=['*.jpg'],
     return CamParams
 
 # %%
-def computeAverageIntrinsics(session_path,trialIDs,CheckerBoardParams,nImages=25):
+def computeAverageIntrinsics(session_path,trialIDs,CheckerBoardParams,nImages=25,cameraModel= None,videoType=".mov"):
     CamParamList = []
     camModels = []
+    trial_name = ''
     
     for trial_id in trialIDs:
-        resp = makeRequestWithRetry('GET',
+        if cameraModel is None:
+            resp = makeRequestWithRetry('GET',
                                     API_URL + "trials/{}/".format(trial_id),
                                     headers = {"Authorization": "Token {}".format(API_TOKEN)})
-        trial = resp.json()
-        camModels.append(trial['videos'][0]['parameters']['model'])
-        trial_name = trial['name']
+            trial = resp.json()
+            camModels.append(trial['videos'][0]['parameters']['model'])
+            trial_name = trial['name']
+        else:
+            camModels.append(cameraModel)
         if trial_name == 'null':
             trial_name = trial_id
         
         # Make directory (folder for trialname, intrinsics also saved there)
         video_dir = os.path.join(session_path,trial_name)
         os.makedirs(video_dir, exist_ok=True)
-        video_path = os.path.join(video_dir,trial_name + ".mov")
+        video_path = os.path.join(video_dir,trial_name + videoType)
         
         # Download video if not done
         if not os.path.exists(video_path):
