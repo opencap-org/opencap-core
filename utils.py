@@ -528,6 +528,22 @@ def downloadVideosFromServer(session_id,trial_id, isDocker=True,
         os.makedirs(session_path, exist_ok=True)
     
     trial = getTrialJson(trial_id)
+    session = getSessionJson(session_id)
+    apiCameraMap = (session.get('meta') or {}).get('camera_map') or {}
+
+    def getCameraIndex(video, fallbackIndex, usedIndices):
+        device_id = video["device_id"].replace('-', '').upper()
+        camera_label = apiCameraMap.get(device_id, {}).get('camera_label', '')
+        if camera_label.startswith('Cam'):
+            try:
+                camera_index = int(camera_label.replace('Cam', ''))
+                if camera_index not in usedIndices:
+                    return camera_index
+            except ValueError:
+                pass
+        while fallbackIndex in usedIndices:
+            fallbackIndex += 1
+        return fallbackIndex
 
     if trial_name is None:
         trial_name = trial['name']
@@ -542,7 +558,10 @@ def downloadVideosFromServer(session_id,trial_id, isDocker=True,
     if not benchmark:
         if not os.path.exists(os.path.join(session_path, "Videos", 'mappingCamDevice.pickle')):
             mappingCamDevice = {}
-            for k, video in enumerate(trial["videos"]):
+            usedIndices = set()
+            for i, video in enumerate(trial["videos"]):
+                k = getCameraIndex(video, i, usedIndices)
+                usedIndices.add(k)
                 os.makedirs(os.path.join(session_path, "Videos", "Cam{}".format(k), "InputMedia", trial_name), exist_ok=True)
                 video_path = os.path.join(session_path, "Videos", "Cam{}".format(k), "InputMedia", trial_name, trial_id + ".mov")
                 downloadVideoFile(video, video_path, trial_id,
@@ -584,11 +603,24 @@ def downloadVideosFromServer(session_id,trial_id, isDocker=True,
             else: # subject parameters will be entered when capturing static pose
                 session_desc = getMetadataFromServer(session_id)      
                 
-            # Load iPhone models.
-            phoneModel= []
-            for i,video in enumerate(trial["videos"]):    
-                phoneModel.append(video['parameters']['model'])
-            session_desc['iphoneModel'] = {'Cam' + str(i) : phoneModel[i] for i in range(len(phoneModel))}
+            # Load camera labels and iPhone models.
+            phoneModel = {}
+            cameraMapping = {}
+            for video in trial["videos"]:
+                device_id = video["device_id"].replace('-', '').upper()
+                if device_id not in mappingCamDevice:
+                    continue
+                camName = 'Cam' + str(mappingCamDevice[device_id])
+                phoneModel[camName] = video.get('parameters', {}).get('model', 'unknown')
+                phone_label = apiCameraMap.get(device_id, {}).get('phone_label')
+                if phone_label:
+                    cameraMapping[camName] = {
+                        'phone_label': phone_label,
+                        'device_id': video["device_id"],
+                    }
+            session_desc['iphoneModel'] = phoneModel
+            if cameraMapping:
+                session_desc['cameraMapping'] = cameraMapping
         
             # Save metadata.
             with open(sessionYamlPath, 'w') as file:
