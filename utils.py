@@ -28,6 +28,8 @@ from utilsAPI import getAPIURL
 
 API_URL = getAPIURL()
 API_TOKEN = getToken()
+DEFAULT_REQUEST_TIMEOUT = (10, 10)
+UPLOAD_REQUEST_TIMEOUT = (10, 300)
 DEPTH_DB_LEVEL = 10
 DEPTH_DB_TRANSFORM = "vertical_delta_shuffle16"
 DEPTH_CONTAINER_MAGIC = b"OCDEPTHDB1\n"
@@ -121,7 +123,8 @@ def uploadFileToS3(filePath):
         makeRequestWithRetry('POST',
                              r['url'],
                              data=r['fields'],
-                             files=files)
+                             files=files,
+                             timeout=UPLOAD_REQUEST_TIMEOUT)
 
     return r['fields']['key']
 
@@ -854,10 +857,11 @@ def getNeutralTrialID(session_id):
     
     if len(neutral_ids)>0:
         neutralID = neutral_ids[-1]
-    elif session['meta']['neutral_trial']:
-        neutralID = session['meta']['neutral_trial']['id']
     else:
-        raise Exception('No neutral trial in session.')
+        neutral_trial = (session.get('meta') or {}).get('neutral_trial')
+        if not neutral_trial:
+            raise Exception('No neutral trial in session.')
+        neutralID = neutral_trial['id']
     
     return neutralID       
 
@@ -892,6 +896,8 @@ def getCalibration(session_id,session_path,trial_type='dynamic',getCalibrationOp
     # download the mapping
     videoFolder = os.path.join(session_path,'Videos')
     os.makedirs(videoFolder, exist_ok=True)
+    if 'camera_mapping' not in calibResultTags:
+        raise Exception('Calibration is missing camera mapping results. Redo calibration before processing dynamic trials.')
     mapURL = trial['results'][calibResultTags.index('camera_mapping')]['media']
     mapLocalPath = os.path.join(videoFolder,'mappingCamDevice.pickle')
     download_file(mapURL,mapLocalPath)
@@ -979,10 +985,8 @@ def changeSessionMetadata(session_ids,newMetaDict):
         existingMeta = session['meta']
         
         # Check if framerate is in metadata. If not, set to 60
-        if 'framerate' not in existingMeta:
-            framerate = 60
-        else:
-            framerate = existingMeta['framerate']
+        framerate = existingMeta.get('settings', {}).get(
+            'framerate', existingMeta.get('framerate', 60))
         if 'filterfrequency' in newMetaDict:
             if newMetaDict['filterfrequency'] != 'default':
                 if float(newMetaDict['filterfrequency']) > framerate/2:
@@ -2081,7 +2085,8 @@ def postProcessedDuration(trial_url, duration):
 # utils for common HTTP requests
 def makeRequestWithRetry(method, url,
                          headers=None, data=None, params=None, files=None,
-                         retries=5, backoff_factor=1):
+                         retries=5, backoff_factor=1,
+                         timeout=DEFAULT_REQUEST_TIMEOUT):
     """
     Makes an HTTP request with retry logic and returns the Response object.
 
@@ -2094,6 +2099,8 @@ def makeRequestWithRetry(method, url,
         params (dict): URL query parameters.
         retries (int): Number of retry attempts.
         backoff_factor (float): Backoff factor for exponential delays.
+        timeout (float or tuple): Seconds to wait for connection/response
+            activity, as accepted by requests.Session().request().
 
     Returns:
         requests.Response: The response object for further processing.
@@ -2113,6 +2120,7 @@ def makeRequestWithRetry(method, url,
                                     headers=headers,
                                     data=data,
                                     params=params,
-                                    files=files)
+                                    files=files,
+                                    timeout=timeout)
     response.raise_for_status()
     return response

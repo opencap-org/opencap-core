@@ -545,6 +545,7 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
                 maxThreshold = 0.015
                 increment = 0.001
                 success = False
+                lastException = None
                 while thresholdPosition <= maxThreshold and not success:
                     try:
                         timeRange4Scaling = getScaleTimeRange(
@@ -553,8 +554,14 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
                             thresholdTime=0.1, removeRoot=True)
                         success = True
                     except Exception as e:
-                        logging.info(f"Attempt identifying scaling time range with thresholdPosition {thresholdPosition} failed: {e}")
-                        thresholdPosition += increment  # Increase the threshold for the next iteration
+                        lastException = e
+                        logging.debug(f"Attempt identifying scaling time range with thresholdPosition {thresholdPosition} failed: {e}")
+
+                    if not success:
+                        thresholdPosition += increment
+
+                if not success:
+                    raise lastException
 
                 # Run scale tool.
                 logging.info('Running Scaling')
