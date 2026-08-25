@@ -39,3 +39,17 @@ These instructions are for Windows 10. The pipeline also runs on Ubuntu. Minimum
 ### Reproducing results from the paper 
 1) Data used in the OpenCap publication are available on [SimTK](https://simtk.org/projects/opencap). This dataset includes raw data (e.g., videos, motion capture, ground reaction forces, electromyography), and processed data (e.g., scaled OpenSim models, inverse kinematics, inverse dynamics, and dynamic simulation results).
 2) The scripts to process and plot the results are found in the `ReproducePaperResults` directory (see README.md in this folder for more details).
+
+# Tests
+
+The test suite validates core functionality of the OpenCap pipeline. To run the tests:
+
+### Prerequisites
+- OpenSim must be installed and accessible via `opensim-cmd` in your PATH
+- All submodules must be initialized and updated (`git submodule update --init --recursive`)
+- The conda environment must be activated
+
+### Running Tests
+Execute the following command from the root directory of the repository:
+```bash
+python -m pytest ./tests/

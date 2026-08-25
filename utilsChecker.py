@@ -507,7 +507,8 @@ def calcExtrinsics(imageFileName, CameraParams, CheckerBoardParams,
 
     # Fallback: if the standard detector fails, try the SB variant (more robust to
     # certain lighting/contrast conditions where adaptive thresholding struggles).
-    # Using ACCURACY|LARGER without EXHAUSTIVE to keep the fallback reasonably fast.
+    # EXHAUSTIVE improves recovery on difficult boards without materially slowing
+    # typical calibration videos.
     corners2_from_sb = False
     if not ret:
         ret_sb, corners_sb, _ = cv2.findChessboardCornersSBWithMeta(

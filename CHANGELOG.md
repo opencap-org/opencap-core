@@ -9,6 +9,9 @@ v1.1
 - Added option for downloading pose pickle files. (#248)
 - Moved synchronization specific files to new module utilsSync.py. (PR #259)
 - Added main regression tests and sync unit tests. (PR #259)
+- Added tests for main pipeline regressions. (PR #290)
+- Added exhaustive calibration fallback. (PR #286)
+- Ensure utility file handles are closed. (#293)
 
 Previous Changes
 ================
