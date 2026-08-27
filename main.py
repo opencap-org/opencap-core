@@ -212,12 +212,19 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
             cameraDirectories[camName] = os.path.join(sessionDir, 'Videos',
                                                       pathCam)
             cameraModels[camName] = sessionMetadata['iphoneModel'][camName]        
+        cameraMapping = sessionMetadata.get('cameraMapping', {})
         
         # Get cameras' intrinsics and extrinsics.     
         # Load parameters if saved, compute and save them if not.
         CamParamDict = {}
         loadedCamParams = {}
         for camName in cameraDirectories:
+            cameraLabel = cameraMapping.get(camName, {}).get('phone_label')
+            calibrationFailurePrefix = (
+                "Calibration failed for {}.".format(cameraLabel)
+                if cameraLabel else
+                "Calibration failed for at least one camera."
+            )
             camDir = cameraDirectories[camName]
             lidarIntrinsicPath = os.path.join(camDir, 'InputMedia', trialName,
                                               'camera_matrix.csv')
@@ -254,7 +261,10 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
                 # webapp will give you the opportunity to compute them.
                 
                 else:
-                    exception = "Intrinsics don't exist for your camera model. OpenCap supports all iOS devices released in 2018 or later: https://www.opencap.ai/get-started."
+                    if cameraLabel:
+                        exception = "Intrinsics don't exist for the camera model used by {}. OpenCap supports all iOS devices released in 2018 or later: https://www.opencap.ai/get-started.".format(cameraLabel)
+                    else:
+                        exception = "Intrinsics don't exist for your camera model. OpenCap supports all iOS devices released in 2018 or later: https://www.opencap.ai/get-started."
                     raise Exception(exception, exception)
                         
                 # Extrinsics ##################################################
@@ -281,9 +291,11 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
                         useSecondExtrinsicsSolution = useSecondExtrinsicsSolution)
                 except Exception as e:
                     if len(e.args) == 2: # specific exception
-                        raise Exception(e.args[0], e.args[1])
+                        exception = "{} {}".format(
+                            calibrationFailurePrefix, e.args[0])
+                        raise Exception(exception, e.args[1])
                     elif len(e.args) == 1: # generic exception
-                        exception = "Camera calibration failed. Verify your setup and try again. Visit https://www.opencap.ai/best-pratices to learn more about camera calibration and https://www.opencap.ai/troubleshooting for potential causes for a failed calibration."
+                        exception = "{} Verify your setup and try again. Visit https://www.opencap.ai/best-pratices to learn more about camera calibration and https://www.opencap.ai/troubleshooting for potential causes for a failed calibration.".format(calibrationFailurePrefix)
                         raise Exception(exception, traceback.format_exc())
                 loadedCamParams[camName] = False
                 
