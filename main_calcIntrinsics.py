@@ -26,6 +26,9 @@ loadTrialInfo = False # Load previous trial names and CheckerBoardParams from fi
 saveIntrinsicsForDeployment = True
 
 deployedFolderNames = ['Deployed_720_60fps','Deployed'] # both folder names if want to keep the detailed folder
+
+cameraModel = "iPhoneTest"  
+videoType = ".mov" #can be .avi or other file formats
     
 # %% Paths to data folder for local testing.
 dataDir = os.path.join(getDataDirectory(),'Data')
@@ -34,7 +37,6 @@ trialFile = os.path.join(sessionDir,'trialInfo.yaml')
 intrinsicComparisonFile = os.path.join(sessionDir,'intrinsicComparison.pkl')
 
 # %% Get checker parameters and filenames if they exist
-
 # TODO this should come from the server API
 # Get checkerboard parameters from metadata.
 metadataPath = os.path.join(sessionDir,'sessionMetadata.yaml')
@@ -61,7 +63,7 @@ if loadTrialInfo:
         
      
 # Compute average intrinsic values from multiple trials of same camera
-CamParamsAverage, CamParamList, intrinsicComparisons, cameraModel = computeAverageIntrinsics(sessionDir,trials,CheckerBoardParams,nImages=50)
+CamParamsAverage, CamParamList, intrinsicComparisons, cameraModel = computeAverageIntrinsics(sessionDir,trials,CheckerBoardParams,nImages=50,cameraModel=cameraModel,videoType=videoType)
 
 
 # Save intrinsics from first camera for deployement 

@@ -1,6 +1,8 @@
 import os
 import shutil
 import sys
+from pathlib import Path
+from unittest.mock import Mock
 
 import cv2
 import numpy as np
@@ -47,6 +49,10 @@ UTAH_FIXTURE_VIDEO = os.path.join(
     'utah',
     'production_success',
     'utah_production_success.mov',
+)
+IPHONE_17E_FIXTURE_DIR = os.path.join(
+    REPO_DIR,
+    'a8d94635-77db-4be4-ab7f-25da84c1a092',
 )
 
 PRIMARY_SUCCESS_FIXTURES = [
@@ -418,3 +424,134 @@ def test_negative_fixtures_reject(
     assert calls['fallback'] > 0
     assert fallback_flags
     assert all(flags & cv2.CALIB_CB_EXHAUSTIVE for flags in fallback_flags)
+
+
+# ---- Intrinsics workflow regression tests ----
+
+def make_intrinsics(focal_length):
+    return {
+        'intrinsicMat': np.array([
+            [focal_length, 0.0, 320.0],
+            [0.0, focal_length + 10.0, 240.0],
+            [0.0, 0.0, 1.0],
+        ]),
+        'distortion': np.array([[0.1, -0.1, 0.01, 0.02, 0.03]]),
+        'imageSize': np.array([[480.0], [640.0]]),
+    }
+
+
+def test_intrinsics_api(tmp_path, monkeypatch):
+    video_url = 'https://example.test/trial-a.mov'
+    response = Mock()
+    response.json.return_value = {
+        'name': 'null',
+        'videos': [{
+            'video': video_url,
+            'parameters': {'model': 'iPhone13,3'},
+        }],
+    }
+    request = Mock(return_value=response)
+    download = Mock(side_effect=lambda _, path: Path(path).touch())
+    extraction = Mock()
+    params = make_intrinsics(1000.0)
+    monkeypatch.setattr(utilsChecker, 'makeRequestWithRetry', request)
+    monkeypatch.setattr(utilsChecker, 'download_file', download)
+    monkeypatch.setattr(utilsChecker, 'video2Images', extraction)
+    monkeypatch.setattr(utilsChecker, 'calcIntrinsics', Mock(return_value=params))
+
+    average, _, _, model = utilsChecker.computeAverageIntrinsics(
+        str(tmp_path), ['trial-a'], DEFAULT_CHECKERBOARD_PARAMS
+    )
+
+    expected_path = os.path.join(tmp_path, 'trial-a', 'trial-a.mov')
+    request.assert_called_once()
+    download.assert_called_once_with(video_url, expected_path)
+    assert extraction.call_args.args[0] == expected_path
+    assert model == 'iPhone13,3'
+    np.testing.assert_allclose(average['intrinsicMat'], params['intrinsicMat'])
+
+
+def test_intrinsics_local(tmp_path, monkeypatch):
+    trial_ids = ['capture-a', 'capture-b']
+    paths = []
+    for name in trial_ids:
+        path = tmp_path / name / f'{name}.avi'
+        path.parent.mkdir()
+        path.touch()
+        paths.append(str(path))
+
+    request = Mock()
+    download = Mock()
+    extraction = Mock()
+    monkeypatch.setattr(utilsChecker, 'makeRequestWithRetry', request)
+    monkeypatch.setattr(utilsChecker, 'download_file', download)
+    monkeypatch.setattr(utilsChecker, 'video2Images', extraction)
+    monkeypatch.setattr(
+        utilsChecker,
+        'calcIntrinsics',
+        Mock(side_effect=[make_intrinsics(900.0), make_intrinsics(1100.0)]),
+    )
+
+    average, _, _, model = utilsChecker.computeAverageIntrinsics(
+        str(tmp_path),
+        trial_ids,
+        DEFAULT_CHECKERBOARD_PARAMS,
+        nImages=5,
+        cameraModel='ResearchCamera',
+        videoType='.avi',
+    )
+
+    request.assert_not_called()
+    download.assert_not_called()
+    assert [call.args[0] for call in extraction.call_args_list] == paths
+    assert model == 'ResearchCamera'
+    np.testing.assert_allclose(average['intrinsicMat'][0, 0], 1000.0)
+
+
+# This fixture is shared separately and is not tracked in this repository, so
+# this regression runs locally when available and skips elsewhere (including CI).
+@pytest.mark.skipif(
+    not os.path.isdir(IPHONE_17E_FIXTURE_DIR),
+    reason='iPhone 17e calibration fixture is not available',
+)
+def test_intrinsics_iphone17e():
+    average, captures, _, model = utilsChecker.computeAverageIntrinsics(
+        IPHONE_17E_FIXTURE_DIR,
+        ['iphone17e', 'iphone17e_1', 'iphone17e_2'],
+        {'dimensions': (11, 8), 'squareSize': 60},
+        cameraModel='iPhone18,5',
+        videoType='.mov',
+    )
+    expected = loadCameraParameters(os.path.join(
+        REPO_DIR,
+        'CameraIntrinsics',
+        'iPhone18,5',
+        'Deployed',
+        'cameraIntrinsics.pickle',
+    ))
+
+    assert len(captures) == 3
+    assert model == 'iPhone18,5'
+    for name in expected:
+        np.testing.assert_allclose(average[name], expected[name])
+
+
+# PR #281 currently raises UnboundLocalError here. Keep this skipped test as
+# possible future coverage for clearer missing-local-video handling.
+@pytest.mark.skip(reason='missing local videos are not handled by PR #281')
+def test_intrinsics_missing(tmp_path, monkeypatch):
+    request = Mock()
+    download = Mock()
+    monkeypatch.setattr(utilsChecker, 'makeRequestWithRetry', request)
+    monkeypatch.setattr(utilsChecker, 'download_file', download)
+
+    with pytest.raises(FileNotFoundError, match='capture-a\\.avi'):
+        utilsChecker.computeAverageIntrinsics(
+            str(tmp_path),
+            ['capture-a'],
+            DEFAULT_CHECKERBOARD_PARAMS,
+            cameraModel='ResearchCamera',
+            videoType='.avi',
+        )
+    request.assert_not_called()
+    download.assert_not_called()
