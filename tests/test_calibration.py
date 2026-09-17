@@ -38,6 +38,11 @@ MAX_MEAN_REPROJECTION_ERROR_PX = 0.5
 
 INTRINSICS_FOLDER = 'Deployed'
 
+# These are provisional values. We should discuss what values would be appropriate.
+MAX_INTRINSICS_REPROJECTION_DIFFERENCE_PX = 0.25
+MAX_INTRINSIC_MATRIX_DIFFERENCE_PX = 2.0
+
+
 ACL_EXHAUSTIVE_FALLBACK_VIDEO = os.path.join(
     CALIBRATION_FIXTURE_DIR,
     'acl',
@@ -50,10 +55,25 @@ UTAH_FIXTURE_VIDEO = os.path.join(
     'production_success',
     'utah_production_success.mov',
 )
-IPHONE_17E_FIXTURE_DIR = os.path.join(
-    REPO_DIR,
-    'a8d94635-77db-4be4-ab7f-25da84c1a092',
+IPAD_A16_FIXTURE_DIR = os.path.join(
+    CALIBRATION_FIXTURE_DIR,
+    'ipad_a16',
 )
+
+
+INTRINSICS_FIXED_IMAGE_DIR = os.path.join(
+    CALIBRATION_FIXTURE_DIR,
+    'ipad_a16',
+    'fixed_images',
+)
+
+EXPECTED_FIXED_IMAGE_COUNT = 49
+
+INTRINSICS_FIXED_EXPECTED = os.path.join(
+    INTRINSICS_FIXED_IMAGE_DIR,
+    'cameraIntrinsics.pickle',
+)
+
 
 PRIMARY_SUCCESS_FIXTURES = [
     (
@@ -192,8 +212,8 @@ def mean_reproj_error(camera_params, checkerboard_params, corners, image_shape):
     image_width = image_shape[1]
     camera_image_width = float(np.squeeze(camera_params['imageSize'])[1])
     scale = image_width / camera_image_width
-    # Need to scale as detected coreners are potentially from upsampled/downsampled image,
-    # but checking agaisnt original camera intrinsics
+    # Need to scale as detected corners are potentially from upsampled/downsampled image,
+    # but checking against original camera intrinsics
     observed_corners = corners / scale
     object_points = generate3Dgrid(checkerboard_params)
     projected_corners, _ = cv2.projectPoints(
@@ -210,6 +230,103 @@ def mean_reproj_error(camera_params, checkerboard_params, corners, image_shape):
     return float(np.mean(corner_errors))
 
 
+def project_intrinsics_grid(
+    points_3d,
+    camera_params,
+    rvec=None,
+    tvec=None,
+):
+    # Project a fixed 3D grid using a camera model.
+    if rvec is None:
+        rvec = np.zeros((3, 1), dtype=np.float64)
+
+    if tvec is None:
+        tvec = np.array(
+            [[0.0], [0.0], [1000.0]],
+            dtype=np.float64,
+        )
+
+    projected_points, _ = cv2.projectPoints(
+        points_3d,
+        rvec,
+        tvec,
+        camera_params['intrinsicMat'],
+        camera_params['distortion'],
+    )
+
+    return projected_points
+
+
+def mean_reprojection_difference(
+    reference_params,
+    calculated_params,
+    checkerboard_params,
+):
+    # Compare the image-space projection produced by two camera models.
+    assert np.array_equal(
+        reference_params['imageSize'],
+        calculated_params['imageSize'],
+    )
+
+    points_3d = generate3Dgrid(checkerboard_params).astype(np.float32)
+
+    reference_points = project_intrinsics_grid(
+        points_3d,
+        reference_params,
+    )
+    calculated_points = project_intrinsics_grid(
+        points_3d,
+        calculated_params,
+    )
+
+    errors = np.linalg.norm(
+        reference_points - calculated_points,
+        axis=2,
+    )
+
+    return float(np.mean(errors)), float(np.max(errors))
+
+def stage_ipad_a16_videos(tmp_path):
+    # Copy the fixed iPad A16 calibration videos to an isolated directory.
+    video_dir = tmp_path / 'ipad_a16_videos'
+    video_dir.mkdir(parents=True, exist_ok=True)
+
+    for capture_name in (
+        'ipad-a16_1',
+        'ipad-a16_2',
+        'ipad-a16_3',
+    ):
+        source_dir = Path(IPAD_A16_FIXTURE_DIR) / capture_name
+        destination_dir = video_dir / capture_name
+
+        destination_dir.mkdir(parents=True, exist_ok=True)
+
+        video_path = source_dir / f'{capture_name}.mov'
+
+        assert video_path.is_file(), (
+            f'Calibration video not found: {video_path}'
+        )
+
+        shutil.copy2(
+            video_path,
+            destination_dir / video_path.name,
+        )
+
+    return video_dir
+
+def stage_fixed_intrinsics_images(tmp_path):
+    # Copy the fixed calibration images to an isolated temporary directory.
+    image_dir = tmp_path / 'fixed_intrinsics_images'
+    image_dir.mkdir(parents=True, exist_ok=True)
+
+    image_paths = sorted(Path(INTRINSICS_FIXED_IMAGE_DIR).glob('*.jpg'))
+    assert len(image_paths) == EXPECTED_FIXED_IMAGE_COUNT
+
+    for image_path in image_paths:
+        shutil.copy2(image_path, image_dir / image_path.name)
+
+    return image_dir
+
 def run_video_calibration(
     video_path,
     checkerboard_params,
@@ -224,7 +341,7 @@ def run_video_calibration(
     calls = {'primary': 0, 'fallback': 0}
     fallback_flags = []
     # captured_corners stores corners detected by the different methods,
-    # pre and post sub pixel refining for primary path and pre and 
+    # pre and post sub pixel refining for primary path and pre and
     # post re-ordering for fallback path
     captured_corners = {
         'raw_primary': None,
@@ -508,37 +625,56 @@ def test_intrinsics_local(tmp_path, monkeypatch):
     np.testing.assert_allclose(average['intrinsicMat'][0, 0], 1000.0)
 
 
-# This fixture is shared separately and is not tracked in this repository, so
-# this regression runs locally when available and skips elsewhere (including CI).
 @pytest.mark.skipif(
-    not os.path.isdir(IPHONE_17E_FIXTURE_DIR),
-    reason='iPhone 17e calibration fixture is not available',
+    not os.path.isdir(IPAD_A16_FIXTURE_DIR),
+    reason='ipad a16 calibration fixture is not available',
 )
-def test_intrinsics_iphone17e():
+def test_intrinsics_ipad_a16(tmp_path):
+    video_dir = stage_ipad_a16_videos(tmp_path)
+
     average, captures, _, model = utilsChecker.computeAverageIntrinsics(
-        IPHONE_17E_FIXTURE_DIR,
-        ['iphone17e', 'iphone17e_1', 'iphone17e_2'],
+        str(video_dir),
+        ['ipad-a16_1', 'ipad-a16_2', 'ipad-a16_3'],
         {'dimensions': (11, 8), 'squareSize': 60},
-        cameraModel='iPhone18,5',
+        cameraModel='iPad15,7',
         videoType='.mov',
+        nImages=50,
     )
+
     expected = loadCameraParameters(os.path.join(
         REPO_DIR,
         'CameraIntrinsics',
-        'iPhone18,5',
+        'iPad15,7',
         'Deployed',
         'cameraIntrinsics.pickle',
     ))
 
     assert len(captures) == 3
-    assert model == 'iPhone18,5'
-    for name in expected:
-        np.testing.assert_allclose(average[name], expected[name])
+    assert model == 'iPad15,7'
+
+    # The intrinsic matrix is expected to remain geometrically close.
+    np.testing.assert_allclose(
+        average['intrinsicMat'],
+        expected['intrinsicMat'],
+        atol=MAX_INTRINSIC_MATRIX_DIFFERENCE_PX,
+        rtol=0,
+    )
+
+    # Distortion coefficients are deliberately not compared directly.
+    # Different valid checkerboard samples can produce noticeably
+    # different distortion coefficients while producing almost the
+    # same image-space projection.
+    mean_error, max_error = mean_reprojection_difference(
+        expected,
+        average,
+        LABVALIDATION_CHECKERBOARD_PARAMS,
+    )
+
+    assert mean_error < MAX_INTRINSICS_REPROJECTION_DIFFERENCE_PX
+    assert max_error < MAX_INTRINSICS_REPROJECTION_DIFFERENCE_PX
 
 
-# PR #281 currently raises UnboundLocalError here. Keep this skipped test as
-# possible future coverage for clearer missing-local-video handling.
-@pytest.mark.skip(reason='missing local videos are not handled by PR #281')
+
 def test_intrinsics_missing(tmp_path, monkeypatch):
     request = Mock()
     download = Mock()
@@ -555,3 +691,38 @@ def test_intrinsics_missing(tmp_path, monkeypatch):
         )
     request.assert_not_called()
     download.assert_not_called()
+
+def test_intrinsics_fixed_images(tmp_path):
+    image_dir = stage_fixed_intrinsics_images(tmp_path)
+
+    calculated = utilsChecker.calcIntrinsics(
+        str(image_dir),
+        CheckerBoardParams=LABVALIDATION_CHECKERBOARD_PARAMS,
+        filenames=['*.jpg'],
+        visualize=False,
+    )
+
+    assert calculated is not None
+
+    expected = loadCameraParameters(INTRINSICS_FIXED_EXPECTED)
+
+    # The intrinsic matrix should remain geometrically close when calibration
+    # is run on the exact fixed set of reference images.
+    np.testing.assert_allclose(
+        calculated['intrinsicMat'],
+        expected['intrinsicMat'],
+        atol=MAX_INTRINSIC_MATRIX_DIFFERENCE_PX,
+        rtol=0,
+    )
+
+    # Distortion coefficients are deliberately not compared directly.
+    # Different valid calibrations can produce different coefficients while
+    # producing nearly identical image-space projections.
+    mean_error, max_error = mean_reprojection_difference(
+        expected,
+        calculated,
+        LABVALIDATION_CHECKERBOARD_PARAMS,
+    )
+
+    assert mean_error < MAX_INTRINSICS_REPROJECTION_DIFFERENCE_PX
+    assert max_error < MAX_INTRINSICS_REPROJECTION_DIFFERENCE_PX
