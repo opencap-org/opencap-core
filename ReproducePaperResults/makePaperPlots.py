@@ -27,7 +27,7 @@ sys.path.append(os.path.join(repoDir,'DataProcessing')) # utilities in child dir
 
 from matplotlib import gridspec
 from sklearn.metrics import mean_absolute_error, roc_auc_score, accuracy_score, roc_curve
-from utilsDataPostprocessing import calc_r2, calc_LSI, join_path_case_insensitive
+from utilsDataPostprocessing import calc_r2, calc_LSI
 
 
 #%%  Directories
@@ -52,7 +52,7 @@ all_motions = ['squats', 'squatsAsym', 'walking', 'walkingTS', 'DJ', 'DJAsym', '
 suffix_motion_name = '_videoAndMocap'
 data_type = 'Video' # only set up for video now
 modalityFolderName = data_type
-poseDetector = 'HRnet'
+poseDetector = 'HRNet'
 cameraSetup = '2-cameras'
 
 if fieldStudy:
@@ -84,8 +84,8 @@ while loadResultsNow:
 
         
         if loadingfieldStudy:
-            pathOSData = join_path_case_insensitive(
-                dataDir, 'FieldStudy', subject, 'OpenSimData', 'Dynamics')
+            pathOSData = os.path.join(dataDir,'FieldStudy',subject,'OpenSimData', 
+                                      'Dynamics')
             
             # Check for data folder
             if not os.path.isdir(pathOSData):
@@ -94,9 +94,9 @@ while loadResultsNow:
             results = np.load(os.path.join(pathOSData,
                           'allActivityResults.npy'),allow_pickle=True).item()
         else:
-            pathOSData = join_path_case_insensitive(
-                dataDir, 'LabValidation', subject, 'OpenSimData',
-                modalityFolderName, poseDetector, cameraSetup, 'Dynamics')
+            pathOSData = os.path.join(dataDir,'LabValidation',subject,'OpenSimData',
+                                       modalityFolderName, poseDetector, 
+                                       cameraSetup,'Dynamics')
             
             # Check for data folder
             if not  os.path.isdir(pathOSData):
