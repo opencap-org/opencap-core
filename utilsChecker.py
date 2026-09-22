@@ -205,7 +205,6 @@ def computeAverageIntrinsics(session_path,trialIDs,CheckerBoardParams,nImages=25
     """
     CamParamList = []
     camModels = []
-    trial_name = 'null'
     
     for trial_id in trialIDs:
         trial = None
@@ -216,8 +215,6 @@ def computeAverageIntrinsics(session_path,trialIDs,CheckerBoardParams,nImages=25
             trial = resp.json()
             camModels.append(trial['videos'][0]['parameters']['model'])
             trial_name = trial['name']
-            if trial_name == 'null':
-                trial_name = trial_id
         else:
             camModels.append(cameraModel)
             trial_name = trial_id

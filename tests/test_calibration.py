@@ -39,7 +39,7 @@ MAX_MEAN_REPROJECTION_ERROR_PX = 0.5
 INTRINSICS_FOLDER = 'Deployed'
 
 # These are provisional values. We should discuss what values would be appropriate.
-MAX_INTRINSICS_REPROJECTION_DIFFERENCE_PX = 0.25
+MAX_INTRINSICS_PROJECTION_DIFFERENCE_PX = 0.25
 MAX_INTRINSIC_MATRIX_DIFFERENCE_PX = 2.0
 
 
@@ -230,61 +230,93 @@ def mean_reproj_error(camera_params, checkerboard_params, corners, image_shape):
     return float(np.mean(corner_errors))
 
 
-def project_intrinsics_grid(
-    points_3d,
-    camera_params,
-    rvec=None,
-    tvec=None,
+def projection_difference(
+    reference_params,
+    calculated_params,
+    grid_spacing=20,
 ):
-    # Project a fixed 3D grid using a camera model.
-    if rvec is None:
-        rvec = np.zeros((3, 1), dtype=np.float64)
+    """
+    Compare two camera models over the full image domain.
 
-    if tvec is None:
-        tvec = np.array(
-            [[0.0], [0.0], [1000.0]],
-            dtype=np.float64,
-        )
+    The reference camera model defines the normalized camera ray associated
+    with each sampled image pixel. Those rays are then projected through both
+    camera models, and the resulting image-space difference is measured.
 
-    projected_points, _ = cv2.projectPoints(
+    This checks whether the calculated calibration reproduces the reference
+    camera's image geometry across the entire image, rather than only over a
+    checkerboard-sized region.
+    """
+    reference_image_size = np.squeeze(reference_params['imageSize']).astype(int)
+    calculated_image_size = np.squeeze(calculated_params['imageSize']).astype(int)
+
+    assert np.array_equal(
+        reference_image_size,
+        calculated_image_size,
+    ), (
+        f"Image sizes differ: reference={reference_image_size}, "
+        f"calculated={calculated_image_size}"
+    )
+
+    image_height, image_width = reference_image_size
+
+    # Sample pixels across the entire image, including the boundaries.
+    x = np.arange(0, image_width, grid_spacing, dtype=np.float32)
+    y = np.arange(0, image_height, grid_spacing, dtype=np.float32)
+
+    if x[-1] != image_width - 1:
+        x = np.append(x, image_width - 1)
+    if y[-1] != image_height - 1:
+        y = np.append(y, image_height - 1)
+
+    xx, yy = np.meshgrid(x, y)
+    image_points = np.stack([xx.ravel(), yy.ravel()], axis=-1).astype(
+        np.float32
+    )
+
+    # Convert reference-image pixels into normalized camera coordinates.
+    # These normalized points define the camera rays used for the comparison.
+    reference_normalized = cv2.undistortPoints(
+        image_points.reshape(-1, 1, 2),
+        reference_params['intrinsicMat'],
+        reference_params['distortion'],
+    ).reshape(-1, 2)
+
+    points_3d = np.column_stack(
+        [
+            reference_normalized,
+            np.ones(len(reference_normalized)),
+        ]
+    ).astype(np.float32)
+
+    rvec = np.zeros((3, 1), dtype=np.float32)
+    tvec = np.array([[0.0], [0.0], [1.0]], dtype=np.float32)
+
+    reference_projected, _ = cv2.projectPoints(
         points_3d,
         rvec,
         tvec,
-        camera_params['intrinsicMat'],
-        camera_params['distortion'],
+        reference_params['intrinsicMat'],
+        reference_params['distortion'],
     )
 
-    return projected_points
-
-
-def mean_reprojection_difference(
-    reference_params,
-    calculated_params,
-    checkerboard_params,
-):
-    # Compare the image-space projection produced by two camera models.
-    assert np.array_equal(
-        reference_params['imageSize'],
-        calculated_params['imageSize'],
-    )
-
-    points_3d = generate3Dgrid(checkerboard_params).astype(np.float32)
-
-    reference_points = project_intrinsics_grid(
+    calculated_projected, _ = cv2.projectPoints(
         points_3d,
-        reference_params,
-    )
-    calculated_points = project_intrinsics_grid(
-        points_3d,
-        calculated_params,
-    )
-
-    errors = np.linalg.norm(
-        reference_points - calculated_points,
-        axis=2,
+        rvec,
+        tvec,
+        calculated_params['intrinsicMat'],
+        calculated_params['distortion'],
     )
 
-    return float(np.mean(errors)), float(np.max(errors))
+    reference_projected = reference_projected.reshape(-1, 2)
+    calculated_projected = calculated_projected.reshape(-1, 2)
+
+    differences = np.linalg.norm(
+        reference_projected - calculated_projected,
+        axis=1,
+    )
+
+    return float(np.mean(differences)), float(np.max(differences))
+
 
 def stage_ipad_a16_videos(tmp_path):
     # Copy the fixed iPad A16 calibration videos to an isolated directory.
@@ -314,6 +346,7 @@ def stage_ipad_a16_videos(tmp_path):
 
     return video_dir
 
+
 def stage_fixed_intrinsics_images(tmp_path):
     # Copy the fixed calibration images to an isolated temporary directory.
     image_dir = tmp_path / 'fixed_intrinsics_images'
@@ -326,6 +359,7 @@ def stage_fixed_intrinsics_images(tmp_path):
         shutil.copy2(image_path, image_dir / image_path.name)
 
     return image_dir
+
 
 def run_video_calibration(
     video_path,
@@ -652,7 +686,7 @@ def test_intrinsics_ipad_a16(tmp_path):
     assert len(captures) == 3
     assert model == 'iPad15,7'
 
-    # The intrinsic matrix is expected to remain geometrically close.
+    # The intrinsic matrix should remain numerically close to the deployed calibration.
     np.testing.assert_allclose(
         average['intrinsicMat'],
         expected['intrinsicMat'],
@@ -661,18 +695,12 @@ def test_intrinsics_ipad_a16(tmp_path):
     )
 
     # Distortion coefficients are deliberately not compared directly.
-    # Different valid checkerboard samples can produce noticeably
+    # Different valid calibrations can produce noticeably
     # different distortion coefficients while producing almost the
     # same image-space projection.
-    mean_error, max_error = mean_reprojection_difference(
-        expected,
-        average,
-        LABVALIDATION_CHECKERBOARD_PARAMS,
-    )
+    _, max_error = projection_difference(expected, average)
 
-    assert mean_error < MAX_INTRINSICS_REPROJECTION_DIFFERENCE_PX
-    assert max_error < MAX_INTRINSICS_REPROJECTION_DIFFERENCE_PX
-
+    assert max_error < MAX_INTRINSICS_PROJECTION_DIFFERENCE_PX
 
 
 def test_intrinsics_missing(tmp_path, monkeypatch):
@@ -706,7 +734,7 @@ def test_intrinsics_fixed_images(tmp_path):
 
     expected = loadCameraParameters(INTRINSICS_FIXED_EXPECTED)
 
-    # The intrinsic matrix should remain geometrically close when calibration
+    # The intrinsic matrix should remain numerically close when calibration
     # is run on the exact fixed set of reference images.
     np.testing.assert_allclose(
         calculated['intrinsicMat'],
@@ -718,11 +746,6 @@ def test_intrinsics_fixed_images(tmp_path):
     # Distortion coefficients are deliberately not compared directly.
     # Different valid calibrations can produce different coefficients while
     # producing nearly identical image-space projections.
-    mean_error, max_error = mean_reprojection_difference(
-        expected,
-        calculated,
-        LABVALIDATION_CHECKERBOARD_PARAMS,
-    )
+    _, max_error = projection_difference(expected, calculated)
 
-    assert mean_error < MAX_INTRINSICS_REPROJECTION_DIFFERENCE_PX
-    assert max_error < MAX_INTRINSICS_REPROJECTION_DIFFERENCE_PX
+    assert max_error < MAX_INTRINSICS_PROJECTION_DIFFERENCE_PX
