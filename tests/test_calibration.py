@@ -10,7 +10,7 @@ import pytest
 
 os.environ.setdefault('API_TOKEN', 'test-token')
 
-from conftest import CALIBRATION_FIXTURE_DIR, REPO_DIR
+from conftest import CALIBRATION_FIXTURE_DIR, INTRINSICS_FIXTURE_DIR, REPO_DIR
 
 sys.path.append(REPO_DIR)
 
@@ -56,14 +56,15 @@ UTAH_FIXTURE_VIDEO = os.path.join(
     'utah_production_success.mov',
 )
 IPAD_A16_FIXTURE_DIR = os.path.join(
-    CALIBRATION_FIXTURE_DIR,
-    'ipad_a16',
+    INTRINSICS_FIXTURE_DIR,
+    'ipad-a16',
 )
 
 
 INTRINSICS_FIXED_IMAGE_DIR = os.path.join(
-    CALIBRATION_FIXTURE_DIR,
-    'ipad_a16',
+    INTRINSICS_FIXTURE_DIR,
+    'ipad-a16',
+    'ipad-a16_1',
     'fixed_images',
 )
 
