@@ -46,8 +46,17 @@ The test suite validates core functionality of the OpenCap pipeline. To run the 
 
 ### Prerequisites
 - OpenSim must be installed and accessible via `opensim-cmd` in your PATH
+- Git LFS must be installed and initialized. This is needed for the `opencap-test-data` submodule.
 - All submodules must be initialized and updated (`git submodule update --init --recursive`)
 - The conda environment must be activated
+
+### Setting up LFS
+
+```
+git lfs install
+git submodule update --init --recursive
+git -C tests/opencap-test-data lfs pull
+```
 
 ### Running Tests
 Execute the following command from the root directory of the repository:
