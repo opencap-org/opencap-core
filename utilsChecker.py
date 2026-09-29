@@ -205,7 +205,7 @@ def computeAverageIntrinsics(session_path,trialIDs,CheckerBoardParams,nImages=25
     """
     CamParamList = []
     camModels = []
-    
+
     for trial_id in trialIDs:
         trial = None
         if cameraModel is None:
@@ -220,7 +220,6 @@ def computeAverageIntrinsics(session_path,trialIDs,CheckerBoardParams,nImages=25
         else:
             camModels.append(cameraModel)
             trial_name = trial_id
-
 
         # Make directory (folder for trialname, intrinsics also saved there)
         video_dir = os.path.join(session_path,trial_name)
