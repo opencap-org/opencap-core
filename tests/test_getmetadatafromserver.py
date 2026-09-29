@@ -57,7 +57,7 @@ class TestGetMetadataFromServer:
                     'augmentermodel': 'v0.2',
                     'filterfrequency': '12',
                     'scalingsetup': 'upright_standing_pose',
-                    'sync_ver': '1.1'
+                    'sync_ver': '1.0'
                 },
                 'checkerboard': {
                     'square_size': 30.0,
@@ -114,12 +114,6 @@ class TestGetMetadataFromServer:
             'meta': {
                 'sessionWithCalibration': {
                     'id': 'calibration-session-789'
-                },
-                'checkerboard': {
-                    'square_size': 25.0,
-                    'cols': 7,
-                    'rows': 5,
-                    'placement': 'ground'
                 }
             },
             'subject': 'subject-789'
@@ -157,7 +151,7 @@ class TestGetMetadataFromServer:
             assert result['augmentermodel'] == 'v0.2'
             assert result['filterfrequency'] == 12.0
             assert result['scalingsetup'] == 'upright_standing_pose'
-            assert result['sync_ver'] == '1.1'
+            assert result['sync_ver'] == '1.0'
 
             # Check calibration parameters
             assert result['checkerBoard']['squareSideLength_mm'] == 30.0
