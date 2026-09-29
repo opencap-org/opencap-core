@@ -1,0 +1,91 @@
+import os
+import sys
+
+import pytest
+from unittest.mock import Mock, patch
+
+
+thisDir = os.path.dirname(os.path.realpath(__file__))
+repoDir = os.path.abspath(os.path.join(thisDir,'../'))
+sys.path.append(repoDir)
+
+from utils import getCalibration, getNeutralTrialID, changeSessionMetadata
+
+
+@patch('utils.getSessionJson')
+def test_get_neutral_trial_id_from_session_trial(mock_get_session):
+    mock_get_session.return_value = {
+        'trials': [
+            {'id': 'dynamic-id', 'name': 'squats'},
+            {'id': 'neutral-id', 'name': 'neutral'},
+        ],
+        'meta': {},
+    }
+
+    assert getNeutralTrialID('session-id') == 'neutral-id'
+
+
+@patch('utils.getSessionJson')
+def test_get_neutral_trial_id_from_metadata_fallback(mock_get_session):
+    mock_get_session.return_value = {
+        'trials': [
+            {'id': 'dynamic-id', 'name': 'squats'},
+        ],
+        'meta': {
+            'neutral_trial': {'id': 'metadata-neutral-id'},
+        },
+    }
+
+    assert getNeutralTrialID('session-id') == 'metadata-neutral-id'
+
+
+@patch('utils.getSessionJson')
+def test_get_neutral_trial_id_raises_clear_error_without_neutral_trial(mock_get_session):
+    mock_get_session.return_value = {
+        'trials': [
+            {'id': 'dynamic-id', 'name': 'squats'},
+        ],
+        'meta': {},
+    }
+
+    with pytest.raises(Exception, match='No neutral trial in session'):
+        getNeutralTrialID('session-id')
+
+
+@patch('utils.getTrialJson')
+@patch('utils.getCalibrationTrialID')
+def test_get_calibration_raises_clear_error_without_camera_mapping(
+        mock_get_calibration_trial_id, mock_get_trial):
+    mock_get_calibration_trial_id.return_value = 'calibration-id'
+    mock_get_trial.return_value = {
+        'results': [
+            {'tag': 'calibration_parameters', 'media': 'calibration-url'},
+        ],
+    }
+
+    with pytest.raises(Exception, match='Redo calibration before processing dynamic trials'):
+        getCalibration('session-id', '/tmp/session')
+        
+@patch('utils.getTrialJson')
+@patch('utils.getNeutralTrialID')
+@patch('utils.makeRequestWithRetry')
+@patch('utils.getSessionJson')
+def test_change_session_metadata_uses_settings_framerate_for_filterfrequency(
+        mock_get_session, mock_make_request, mock_get_neutral, mock_get_trial):
+    mock_get_session.return_value = {
+        'meta': {
+            'settings': {
+                'framerate': 240,
+            },
+        },
+    }
+    mock_make_request.return_value = Mock(status_code=200)
+    mock_get_neutral.return_value = 'neutral-id'
+    mock_get_trial.return_value = {
+        'results': [],
+    }
+
+    changeSessionMetadata(['session-id'], {'filterfrequency': 100})
+
+    patched_meta = mock_make_request.call_args.kwargs['data']['meta']
+    assert '"filterfrequency": "100"' in patched_meta

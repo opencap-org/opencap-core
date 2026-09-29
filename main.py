@@ -26,6 +26,7 @@ from utilsChecker import triangulateMultiviewVideo
 from utilsChecker import writeTRCfrom3DKeypoints
 from utilsChecker import popNeutralPoseImages
 from utilsChecker import rotateIntrinsics
+from utilsChecker import loadLidarIntrinsicMatrix
 from utilsSync import synchronizeVideos
 from utilsDetector  import runPoseDetector
 from utilsAugmenter import augmentTRC
@@ -43,7 +44,8 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
          dataDir=None, overwriteAugmenterModel=False,
          filter_frequency='default', overwriteFilterFrequency=False,
          scaling_setup='upright_standing_pose', overwriteScalingSetup=False,
-         overwriteCamerasToUse=False, syncVer=None,):
+         overwriteCamerasToUse=False, syncVer=None,
+         useLidarIntrinsics=False,):
 
     # %% High-level settings.
     # Camera calibration.
@@ -210,17 +212,28 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
             cameraDirectories[camName] = os.path.join(sessionDir, 'Videos',
                                                       pathCam)
             cameraModels[camName] = sessionMetadata['iphoneModel'][camName]        
+        cameraMapping = sessionMetadata.get('cameraMapping', {})
         
         # Get cameras' intrinsics and extrinsics.     
         # Load parameters if saved, compute and save them if not.
         CamParamDict = {}
         loadedCamParams = {}
         for camName in cameraDirectories:
+            cameraLabel = cameraMapping.get(camName, {}).get('phone_label')
+            calibrationFailurePrefix = (
+                "Calibration failed for {}.".format(cameraLabel)
+                if cameraLabel else
+                "Calibration failed for at least one camera."
+            )
             camDir = cameraDirectories[camName]
+            lidarIntrinsicPath = os.path.join(camDir, 'InputMedia', trialName,
+                                              'camera_matrix.csv')
+            hasLidarIntrinsics = (
+                useLidarIntrinsics and os.path.exists(lidarIntrinsicPath))
             # Intrinsics ######################################################
             # Intrinsics and extrinsics already exist for this session.
             if os.path.exists(
-                    os.path.join(camDir,"cameraIntrinsicsExtrinsics.pickle")):
+                    os.path.join(camDir,"cameraIntrinsicsExtrinsics.pickle")) and not hasLidarIntrinsics:
                 logging.info("Load extrinsics for {} - already existing".format(
                     camName))
                 CamParams = loadCameraParameters(
@@ -240,12 +253,18 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
                 if os.path.exists(permIntrinsicDir):
                     CamParams = loadCameraParameters(
                         os.path.join(permIntrinsicDir,
-                                      'cameraIntrinsics.pickle'))                    
+                                      'cameraIntrinsics.pickle'))
+                    if hasLidarIntrinsics:
+                        CamParams['intrinsicMat'] = loadLidarIntrinsicMatrix(lidarIntrinsicPath)
+                        logging.info("Using LiDAR camera_matrix.csv intrinsics for {}".format(camName))
                 # Intrinsics do not exist throw an error. Eventually the
                 # webapp will give you the opportunity to compute them.
                 
                 else:
-                    exception = "Intrinsics don't exist for your camera model. OpenCap supports all iOS devices released in 2018 or later: https://www.opencap.ai/get-started."
+                    if cameraLabel:
+                        exception = "Intrinsics don't exist for the camera model used by {}. OpenCap supports all iOS devices released in 2018 or later: https://www.opencap.ai/get-started.".format(cameraLabel)
+                    else:
+                        exception = "Intrinsics don't exist for your camera model. OpenCap supports all iOS devices released in 2018 or later: https://www.opencap.ai/get-started."
                     raise Exception(exception, exception)
                         
                 # Extrinsics ##################################################
@@ -272,9 +291,11 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
                         useSecondExtrinsicsSolution = useSecondExtrinsicsSolution)
                 except Exception as e:
                     if len(e.args) == 2: # specific exception
-                        raise Exception(e.args[0], e.args[1])
+                        exception = "{} {}".format(
+                            calibrationFailurePrefix, e.args[0])
+                        raise Exception(exception, e.args[1])
                     elif len(e.args) == 1: # generic exception
-                        exception = "Camera calibration failed. Verify your setup and try again. Visit https://www.opencap.ai/best-pratices to learn more about camera calibration and https://www.opencap.ai/troubleshooting for potential causes for a failed calibration."
+                        exception = "{} Verify your setup and try again. Visit https://www.opencap.ai/best-pratices to learn more about camera calibration and https://www.opencap.ai/troubleshooting for potential causes for a failed calibration.".format(calibrationFailurePrefix)
                         raise Exception(exception, traceback.format_exc())
                 loadedCamParams[camName] = False
                 
@@ -536,6 +557,7 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
                 maxThreshold = 0.015
                 increment = 0.001
                 success = False
+                lastException = None
                 while thresholdPosition <= maxThreshold and not success:
                     try:
                         timeRange4Scaling = getScaleTimeRange(
@@ -544,8 +566,14 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
                             thresholdTime=0.1, removeRoot=True)
                         success = True
                     except Exception as e:
-                        logging.info(f"Attempt identifying scaling time range with thresholdPosition {thresholdPosition} failed: {e}")
-                        thresholdPosition += increment  # Increase the threshold for the next iteration
+                        lastException = e
+                        logging.debug(f"Attempt identifying scaling time range with thresholdPosition {thresholdPosition} failed: {e}")
+
+                    if not success:
+                        thresholdPosition += increment
+
+                if not success:
+                    raise lastException
 
                 # Run scale tool.
                 logging.info('Running Scaling')

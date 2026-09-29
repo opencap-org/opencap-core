@@ -19,6 +19,7 @@ from scipy.signal import sosfiltfilt, butter, find_peaks
 from scipy.interpolate import pchip_interpolate
 from scipy.spatial.transform import Rotation 
 from itertools import combinations
+from numpy.lib.stride_tricks import sliding_window_view
 import copy
 from utilsCameraPy3 import Camera, nview_linear_triangulations
 from utils import getOpenPoseMarkerNames, getOpenPoseFaceMarkers
@@ -193,27 +194,44 @@ def calcIntrinsics(folderName, CheckerBoardParams=None, filenames=['*.jpg'],
     return CamParams
 
 # %%
-def computeAverageIntrinsics(session_path,trialIDs,CheckerBoardParams,nImages=25):
+def computeAverageIntrinsics(session_path,trialIDs,CheckerBoardParams,nImages=25,cameraModel=None,videoType=".mov"):
+    """Average camera intrinsics across multiple checkerboard trials.
+
+    If cameraModel is None, camera model and trial name are fetched
+    from the API and the video is downloaded if it's not local.
+
+    If cameraModel is given, each video must already exist at
+    <session_path>/<trial_id>/<trial_id><videoType>.
+    """
     CamParamList = []
     camModels = []
-    
+
     for trial_id in trialIDs:
-        resp = makeRequestWithRetry('GET',
+        trial = None
+        if cameraModel is None:
+            resp = makeRequestWithRetry('GET',
                                     API_URL + "trials/{}/".format(trial_id),
                                     headers = {"Authorization": "Token {}".format(API_TOKEN)})
-        trial = resp.json()
-        camModels.append(trial['videos'][0]['parameters']['model'])
-        trial_name = trial['name']
-        if trial_name == 'null':
+            trial = resp.json()
+            camModels.append(trial['videos'][0]['parameters']['model'])
+            trial_name = trial['name']
+            if trial_name == 'null':
+                trial_name = trial_id
+        else:
+            camModels.append(cameraModel)
             trial_name = trial_id
-        
+
         # Make directory (folder for trialname, intrinsics also saved there)
         video_dir = os.path.join(session_path,trial_name)
         os.makedirs(video_dir, exist_ok=True)
-        video_path = os.path.join(video_dir,trial_name + ".mov")
-        
+        video_path = os.path.join(video_dir,trial_name + videoType)
+
         # Download video if not done
         if not os.path.exists(video_path):
+            if trial is None:
+                raise FileNotFoundError(
+                    f"No video at {video_path}. When cameraModel is specified, videos are "
+                    "not downloaded from the API and must already be on disk.")
             download_file(trial["videos"][0]["video"], video_path)
             
         if not os.path.exists(os.path.join(video_dir,'cameraIntrinsics.pickle')):
@@ -273,6 +291,81 @@ def generate3Dgrid(CheckerBoardParams):
     
     return objectp3d
 
+# codex implementation of this https://github.com/opencv/opencv/issues/22083#issuecomment-2354470395
+# to identify where the black corner is on an asymmetrical chessboard
+def warpChessboardToCanonicalView(img, corners, pattern, squareResolution=1):
+    width, height = pattern[:2]
+    canonicalCorners = np.array([
+        [0.5, 0.5],
+        [width - 0.5, 0.5],
+        [width - 0.5, height - 0.5],
+        [0.5, height - 0.5]
+    ])
+    canonicalCorners = (canonicalCorners + 0.5) * squareResolution - 0.5
+
+    imageCorners = corners[[0,
+                            width - 1,
+                            (height - 1) * width + width - 1,
+                            (height - 1) * width]].reshape(-1, 2)
+    homography, _ = cv2.findHomography(imageCorners,
+                                       canonicalCorners.reshape(-1, 2))
+    if homography is None:
+        return None
+
+    return cv2.warpPerspective(
+        img,
+        homography,
+        ((width + 1) * squareResolution, (height + 1) * squareResolution),
+        flags=cv2.INTER_NEAREST)
+
+
+def needsCornerOrderFlip(canonicalImage, squareResolution=1):
+    if canonicalImage.ndim == 3:
+        normalizedImage = (canonicalImage / 255.0).mean(-1)
+    else:
+        normalizedImage = canonicalImage / 255.0
+
+    normalizedImage = sliding_window_view(
+        normalizedImage, (squareResolution, squareResolution)).mean((-1, -2))
+
+    def signOfDeterminant(i, j):
+        return np.sign(normalizedImage[i, j] * normalizedImage[i + 1, j + 1] -
+                       normalizedImage[i, j + 1] * normalizedImage[i + 1, j])
+
+    height, width = normalizedImage.shape[:2]
+    cornerSigns = (
+        signOfDeterminant(0, 0),
+        signOfDeterminant(0, width - 2),
+        signOfDeterminant(height - 2, width - 2),
+        signOfDeterminant(height - 2, 0))
+
+    if sum(cornerSigns) != 0:
+        return None, "Pattern not identified correctly, or not an asymmetric pattern"
+
+    return cornerSigns[0] > 0, None
+
+
+def ensureCornerOrdering(img, corners, pattern, squareResolution=1):
+    # Requires an asymmetric pattern, i.e. exactly one pattern dimension is odd.
+    if (pattern[0] % 2 == 0) == (pattern[1] % 2 == 0):
+        return corners, False, "Cannot ensure SB checkerboard ordering without an asymmetric pattern"
+
+    canonicalImage = warpChessboardToCanonicalView(
+        img, corners, pattern, squareResolution=squareResolution)
+    if canonicalImage is None:
+        return corners, False, "Could not compute checkerboard homography"
+
+    needsFlip, errorMessage = needsCornerOrderFlip(
+        canonicalImage, squareResolution=squareResolution)
+    if errorMessage is not None:
+        return corners, False, errorMessage
+
+    if needsFlip:
+        print('flipped corners for extrinsics')
+        corners = corners[::-1]
+
+    return corners, True, None
+
 # %%
 def saveCameraParameters(filename,CameraParams):
     if not os.path.exists(os.path.dirname(filename)):
@@ -284,6 +377,15 @@ def saveCameraParameters(filename,CameraParams):
     
     return True
 
+def loadLidarIntrinsicMatrix(cameraMatrixPath):
+    intrinsicMat = np.loadtxt(cameraMatrixPath, delimiter=',')
+    if intrinsicMat.shape != (3, 3):
+        raise Exception("LiDAR camera_matrix.csv must contain a 3x3 matrix.")
+
+    intrinsicMat = intrinsicMat.astype(np.float64)
+    intrinsicMat[0, 2], intrinsicMat[1, 2] = intrinsicMat[1, 2], intrinsicMat[0, 2]
+    return intrinsicMat
+    
 #%% 
 def getVideoRotation(videoPath):
     
@@ -367,6 +469,7 @@ def calcExtrinsics(imageFileName, CameraParams, CheckerBoardParams,
     
     #  3D points real world coordinates. Assuming z=0
     objectp3d = generate3Dgrid(CheckerBoardParams)
+    detectedCheckerBoardParams = CheckerBoardParams
     
     # Load and resize image - remember calibration image res needs to be same as all processing
     image = cv2.imread(imageFileName)
@@ -420,6 +523,34 @@ def calcExtrinsics(imageFileName, CameraParams, CheckerBoardParams,
                 grayColor, CheckerBoardParams['dimensions'],  
                 cv2.CALIB_CB_ADAPTIVE_THRESH) 
 
+    # Fallback: if the standard detector fails, try the SB variant (more robust to
+    # certain lighting/contrast conditions where adaptive thresholding struggles).
+    # EXHAUSTIVE improves recovery on difficult boards without materially slowing
+    # typical calibration videos.
+    corners2_from_sb = False
+    if not ret:
+        ret_sb, corners_sb, meta_sb = cv2.findChessboardCornersSBWithMeta(
+            grayColor, CheckerBoardParams['dimensions'],
+                cv2.CALIB_CB_ACCURACY | cv2.CALIB_CB_LARGER | cv2.CALIB_CB_EXHAUSTIVE)
+        if ret_sb:
+            detectedDimensions = meta_sb.shape[::-1]
+            checkerCopy = copy.copy(CheckerBoardParams)
+            checkerCopy['dimensions'] = detectedDimensions
+            detectedCheckerBoardParams = checkerCopy
+            objectp3d = generate3Dgrid(detectedCheckerBoardParams)
+            ret = True
+            corners, orderingSuccess, orderingError = ensureCornerOrdering(
+                grayColor, corners_sb, detectedCheckerBoardParams['dimensions'],
+                squareResolution=2)
+            if orderingSuccess:
+                corners2_from_sb = True
+                if tuple(detectedDimensions) != tuple(CheckerBoardParams['dimensions']):
+                    print('Detected checkerboard dimensions {} instead of input dimensions {}.'.format(
+                        detectedDimensions, CheckerBoardParams['dimensions']))
+            else:
+                print('Rejected SB checkerboard detection: ' + orderingError)
+                ret = False
+
     # If desired number of corners can be detected then, 
     # refine the pixel coordinates and display 
     # them on the images of checker board 
@@ -429,14 +560,18 @@ def calcExtrinsics(imageFileName, CameraParams, CheckerBoardParams,
   
         # Refining pixel coordinates 
         # for given 2d points. 
-        corners2 = cv2.cornerSubPix( 
-            grayColor, corners, (11, 11), (-1, -1), criteria) / imageUpsampleFactor
+        # SBWithMeta corners are already subpixel-accurate; skip cornerSubPix in that case.
+        if corners2_from_sb:
+            corners2 = corners / imageUpsampleFactor
+        else:
+            corners2 = cv2.cornerSubPix( 
+                grayColor, corners, (11, 11), (-1, -1), criteria) / imageUpsampleFactor
   
         twodpoints.append(corners2) 
   
         # For testing: Draw and display the corners 
         # image = cv2.drawChessboardCorners(image,  
-        #                                  CheckerBoardParams['dimensions'],  
+        #                                  detectedCheckerBoardParams['dimensions'],
         #                                   corners2, ret) 
         # Draw small dots instead
         # Choose dot size based on size of squares in pixels

@@ -4,11 +4,15 @@ This is not a comprehensive list of changes but rather a hand-curated collection
 
 v1.1
 =====
+- Added support for iPhone 17e and iPad Air (A4) (PR #276)
 - Improved synchronization with an arm raise (hand punch). (#182)
 - Added option for downloading pose pickle files. (#248)
 - Moved synchronization specific files to new module utilsSync.py. (PR #259)
 - Added main regression tests and sync unit tests. (PR #259)
 - Included sync version in getMetadataFromServer, and created test case (PR #275).
+- Added tests for main pipeline regressions. (PR #290)
+- Added exhaustive calibration fallback. (PR #286)
+- Ensure utility file handles are closed. (#293)
 
 Previous Changes
 ================
