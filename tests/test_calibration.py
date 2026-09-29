@@ -1,4 +1,5 @@
 import os
+import sys
 
 import cv2
 import pytest
@@ -14,8 +15,9 @@ from tests.calibration_test_utils import (
     sb_flags
 )
 
-from conftest import CALIBRATION_FIXTURE_DIR
+from conftest import CALIBRATION_FIXTURE_DIR, REPO_DIR
 
+sys.path.append(REPO_DIR)
 
 # ---- Checkerboard / fixture constants ----
 

@@ -1,5 +1,6 @@
 import os
 import shutil
+import sys
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -22,6 +23,7 @@ from utilsChecker import (
 
 from conftest import INTRINSICS_FIXTURE_DIR, REPO_DIR
 
+sys.path.append(REPO_DIR)
 
 # ---- Checkerboard / fixture constants ----
 
@@ -213,7 +215,7 @@ def test_intrinsics_ipad_a16(tmp_path):
     # Different valid calibrations can produce noticeably
     # different distortion coefficients while producing almost the
     # same image-space projection.
-    _, max_error = projection_difference(expected, average)
+    max_error = projection_difference(expected, average)
 
     assert max_error < MAX_INTRINSICS_PROJECTION_DIFFERENCE_PX
 
@@ -261,6 +263,6 @@ def test_intrinsics_fixed_images(tmp_path):
     # Distortion coefficients are deliberately not compared directly.
     # Different valid calibrations can produce different coefficients while
     # producing nearly identical image-space projections.
-    _, max_error = projection_difference(expected, calculated)
+    max_error = projection_difference(expected, calculated)
 
     assert max_error < MAX_INTRINSICS_PROJECTION_DIFFERENCE_PX

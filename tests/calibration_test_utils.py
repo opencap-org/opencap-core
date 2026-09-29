@@ -198,7 +198,7 @@ def projection_difference(
         axis=1,
     )
 
-    return float(np.mean(differences)), float(np.max(differences))
+    return float(np.max(differences))
 
 
 
