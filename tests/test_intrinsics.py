@@ -9,6 +9,10 @@ import pytest
 
 os.environ.setdefault('API_TOKEN', 'test-token')
 
+from conftest import INTRINSICS_FIXTURE_DIR, REPO_DIR
+
+sys.path.append(REPO_DIR)
+
 import utilsChecker
 
 from tests.calibration_test_utils import (
@@ -20,10 +24,6 @@ from tests.calibration_test_utils import (
 from utilsChecker import (
     loadCameraParameters,
 )
-
-from conftest import INTRINSICS_FIXTURE_DIR, REPO_DIR
-
-sys.path.append(REPO_DIR)
 
 # ---- Checkerboard / fixture constants ----
 

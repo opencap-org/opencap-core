@@ -6,6 +6,10 @@ import pytest
 
 os.environ.setdefault('API_TOKEN', 'test-token')
 
+from conftest import CALIBRATION_FIXTURE_DIR, REPO_DIR
+
+sys.path.append(REPO_DIR)
+
 from tests.calibration_test_utils import (
     DEFAULT_CHECKERBOARD_PARAMS,
     LABVALIDATION_CHECKERBOARD_PARAMS,
@@ -14,10 +18,6 @@ from tests.calibration_test_utils import (
     MAX_MEAN_REPROJECTION_ERROR_PX,
     sb_flags
 )
-
-from conftest import CALIBRATION_FIXTURE_DIR, REPO_DIR
-
-sys.path.append(REPO_DIR)
 
 # ---- Checkerboard / fixture constants ----
 
