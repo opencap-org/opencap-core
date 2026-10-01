@@ -23,6 +23,7 @@ import pandas as pd
 from scipy import signal
 from urllib3.util.retry import Retry
 
+from defaults import DEFAULT_SYNC_VER
 from utilsAuth import getToken
 from utilsAPI import getAPIURL
 
@@ -773,6 +774,10 @@ def getMetadataFromServer(session_id,justCheckerParams=False):
                         session_desc["scalingsetup"] = session['meta']['settings']['scalingsetup']
                     except:
                         session_desc["scalingsetup"] = 'upright_standing_pose'
+                try:
+                    session_desc["sync_ver"] = session['meta']['settings']['sync_ver']
+                except:
+                    session_desc["sync_ver"] = DEFAULT_SYNC_VER
             else:                
                 subject_info = getSubjectJson(session['subject'])                
                 session_desc["subjectID"] = subject_info['name']
@@ -801,6 +806,10 @@ def getMetadataFromServer(session_id,justCheckerParams=False):
                     session_desc["scalingsetup"] = session['meta']['settings']['scalingsetup']
                 except:
                     session_desc["scalingsetup"] = 'upright_standing_pose'
+                try:
+                    session_desc["sync_ver"] = session['meta']['settings']['sync_ver']
+                except:
+                    session_desc["sync_ver"] = DEFAULT_SYNC_VER
 
         if 'sessionWithCalibration' in session['meta'] and 'checkerboard' not in session['meta']:
             newSessionId = session['meta']['sessionWithCalibration']['id']

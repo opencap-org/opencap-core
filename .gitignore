@@ -26,4 +26,6 @@ newsletter.py
 
 .DS_Store
 .vscode/
+.idea
+
 sandbox_process_trial.py
