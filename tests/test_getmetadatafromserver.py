@@ -9,6 +9,7 @@ repoDir = os.path.abspath(os.path.join(thisDir, '../'))
 sys.path.append(repoDir)
 
 from utils import getMetadataFromServer
+import defaults
 
 
 class TestGetMetadataFromServer:
@@ -417,3 +418,58 @@ class TestGetMetadataFromServer:
         with patch('utils.getSessionJson', return_value=session_json):
             result = getMetadataFromServer('test-session-123')
             assert result['posemodel'] == 'openpose'  # Should default to openpose
+
+    def test_get_metadata_default_sync_ver_when_missing(self):
+        """Test that sync_ver defaults to defaults.DEFAULT_SYNC_VER when not specified in default metadata."""
+        # Default metadata intentionally omits 'sync_ver'
+        default_metadata_without_sync_ver = {
+            "subjectID": "default_subject",
+            "mass_kg": 75.0,
+            "height_m": 1.75,
+            "gender_mf": "Prefer not to respond",
+            "posemodel": "openpose",
+            "openSimModel": "LaiUhlrich2022",
+            "augmentermodel": "v0.2",
+            "filterfrequency": "default",
+            "scalingsetup": "upright_standing_pose",
+            # Intentionally omit syncVer.
+            "checkerBoard": {
+                "squareSideLength_mm": 25.0,
+                "black2BlackCornersWidth_n": 7,
+                "black2BlackCornersHeight_n": 5,
+                "placement": "ground"
+            }
+        }
+
+        # Session metadata also does not specify sync_ver
+        session_json = {
+            'id': 'test-session-123',
+            'name': 'Test Session',
+            'meta': {
+                'subject': {
+                    'id': 'test-subject',
+                    'mass': 80.5,
+                    'height': 1.82,
+                },
+                'settings': {
+                    'openSimModel': 'LaiUhlrich2022',
+                    'augmentermodel': 'v0.2',
+                    'filterfrequency': '12',
+                    'scalingsetup': 'upright_standing_pose',
+                    # Intentionally omit syncVer.
+                },
+                'checkerboard': {
+                    'square_size': 30.0,
+                    'cols': 8,
+                    'rows': 6,
+                    'placement': 'floor'
+                }
+            },
+            'subject': None
+        }
+
+        with patch('utils.importMetadata', return_value=default_metadata_without_sync_ver):
+            with patch('utils.getSessionJson', return_value=session_json):
+                result = getMetadataFromServer('test-session-123')
+
+                assert result['sync_ver'] == defaults.DEFAULT_SYNC_VER
