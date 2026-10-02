@@ -194,27 +194,44 @@ def calcIntrinsics(folderName, CheckerBoardParams=None, filenames=['*.jpg'],
     return CamParams
 
 # %%
-def computeAverageIntrinsics(session_path,trialIDs,CheckerBoardParams,nImages=25):
+def computeAverageIntrinsics(session_path,trialIDs,CheckerBoardParams,nImages=25,cameraModel=None,videoType=".mov"):
+    """Average camera intrinsics across multiple checkerboard trials.
+
+    If cameraModel is None, camera model and trial name are fetched
+    from the API and the video is downloaded if it's not local.
+
+    If cameraModel is given, each video must already exist at
+    <session_path>/<trial_id>/<trial_id><videoType>.
+    """
     CamParamList = []
     camModels = []
-    
+
     for trial_id in trialIDs:
-        resp = makeRequestWithRetry('GET',
+        trial = None
+        if cameraModel is None:
+            resp = makeRequestWithRetry('GET',
                                     API_URL + "trials/{}/".format(trial_id),
                                     headers = {"Authorization": "Token {}".format(API_TOKEN)})
-        trial = resp.json()
-        camModels.append(trial['videos'][0]['parameters']['model'])
-        trial_name = trial['name']
-        if trial_name == 'null':
+            trial = resp.json()
+            camModels.append(trial['videos'][0]['parameters']['model'])
+            trial_name = trial['name']
+            if trial_name == 'null':
+                trial_name = trial_id
+        else:
+            camModels.append(cameraModel)
             trial_name = trial_id
-        
+
         # Make directory (folder for trialname, intrinsics also saved there)
         video_dir = os.path.join(session_path,trial_name)
         os.makedirs(video_dir, exist_ok=True)
-        video_path = os.path.join(video_dir,trial_name + ".mov")
-        
+        video_path = os.path.join(video_dir,trial_name + videoType)
+
         # Download video if not done
         if not os.path.exists(video_path):
+            if trial is None:
+                raise FileNotFoundError(
+                    f"No video at {video_path}. When cameraModel is specified, videos are "
+                    "not downloaded from the API and must already be on disk.")
             download_file(trial["videos"][0]["video"], video_path)
             
         if not os.path.exists(os.path.join(video_dir,'cameraIntrinsics.pickle')):
