@@ -318,7 +318,7 @@ class TestGetMetadataFromServer:
             assert result['augmentermodel'] == 'v0.2'
             assert result['filterfrequency'] == 'default'
             assert result['scalingsetup'] == 'upright_standing_pose'
-            assert result['sync_ver'] == '1.1'
+            assert result['sync_ver'] == defaults.DEFAULT_SYNC_VER
 
     def test_get_metadata_different_genders(self, mock_default_metadata):
         """Test handling of different gender values."""
