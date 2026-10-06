@@ -1,4 +1,5 @@
 import glob
+import inspect
 import logging
 import os
 import pickle
@@ -12,6 +13,8 @@ repoDir = os.path.abspath(os.path.join(thisDir,'../'))
 sys.path.append(repoDir)
 from utils import loadCameraParameters
 from utilsSync import synchronizeVideos, detectHandPunchAllVideos, syncHandPunch, syncHandPunch_v2
+
+import defaults
 
 # Helper functions
 
@@ -655,4 +658,53 @@ class TestSyncHandPunch:
         assert f"signalType: {signal_type}" in caplog.text
         assert f"signalFilterFreq: {filter_freq}" in caplog.text
         assert lag == input_lag
-        
+
+class TestSyncVer:
+
+    def test_synchronize_videos_uses_default_sync_ver(self, caplog):
+        """Verify synchronizeVideos defaults uses sync version if not provided"""
+        caplog.set_level(logging.INFO)
+
+        trial_name = 'squats'
+        trialRelativePath = os.path.join(
+            'InputMedia',
+            trial_name,
+            f'{trial_name}.mov'
+        )
+
+        CamParamDict = {}
+        for camName in cameraDirectories:
+            camDir = cameraDirectories[camName]
+            CamParams = loadCameraParameters(
+                os.path.join(
+                    camDir,
+                    "cameraIntrinsicsExtrinsics.pickle"
+                )
+            )
+            CamParamDict[camName] = CamParams.copy()
+
+        synchronizeVideos(
+            cameraDirectories,
+            trialRelativePath,
+            '',
+            undistortPoints=True,
+            CamParamDict=CamParamDict,
+            filtFreqs={'gait': 12, 'default': 500},
+            confidenceThreshold=0.4,
+            imageBasedTracker=False,
+            cams2Use=['all'],
+            poseDetector='mmpose',
+            trialName=trial_name,
+            resolutionPoseDetection='default',
+            # Intentionally omit syncVer.
+        )
+
+        assert f'Synchronizing Keypoints using version {defaults.DEFAULT_SYNC_VER}' in caplog.text
+
+    def test_synchronize_videos_default_sync_ver_in_signature(self):
+        """Verify synchronizeVideos defaults is what we expect in signature the sync version if not provided"""
+        default_sync_ver = inspect.signature(
+            synchronizeVideos
+        ).parameters['syncVer'].default
+
+        assert default_sync_ver == defaults.DEFAULT_SYNC_VER
