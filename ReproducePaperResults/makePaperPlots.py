@@ -52,7 +52,7 @@ all_motions = ['squats', 'squatsAsym', 'walking', 'walkingTS', 'DJ', 'DJAsym', '
 suffix_motion_name = '_videoAndMocap'
 data_type = 'Video' # only set up for video now
 modalityFolderName = data_type
-poseDetector = 'HRnet'
+poseDetector = 'HRNet'
 cameraSetup = '2-cameras'
 
 if fieldStudy:
