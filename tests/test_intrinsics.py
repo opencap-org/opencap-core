@@ -1,9 +1,11 @@
+import copy
 import os
 import shutil
 import sys
 from pathlib import Path
 from unittest.mock import Mock
 
+import cv2
 import numpy as np
 import pytest
 
@@ -266,3 +268,50 @@ def test_intrinsics_fixed_images(tmp_path):
     max_error = projection_difference(expected, calculated)
 
     assert max_error < MAX_INTRINSICS_PROJECTION_DIFFERENCE_PX
+
+
+@pytest.mark.parametrize('rotation', [0, 180, 270])
+def test_rotate_intrinsics_matches_rotated_image(rotation, monkeypatch):
+    # Intrinsics are stored upright (rotation 90). rotateIntrinsics must describe the same
+    # camera after the image is rotated: projecting a 3D point with the rotated parameters
+    # must land on the rotated pixel of its projection with the upright parameters. This
+    # covers the focal lengths, the principal point and the tangential distortion (p1, p2).
+    width, height = 720, 1280  # upright image; imageSize is [height, width]
+    upright = {
+        'intrinsicMat': np.array([[1100.0, 0.0, 362.3],
+                                  [0.0, 1090.0, 641.7],
+                                  [0.0, 0.0, 1.0]]),
+        'distortion': np.array([[0.12, -0.35, -0.0069, -0.003, 0.2]]),
+        'imageSize': np.array([[height], [width]]),
+    }
+
+    # Exact pixel mapping (pixel centres at integer coordinates) and the matching
+    # camera-frame rotation, for each video rotation.
+    pixel_map = {
+        0: lambda u, v: (v, (width - 1) - u),
+        180: lambda u, v: ((height - 1) - v, u),
+        270: lambda u, v: ((width - 1) - u, (height - 1) - v),
+    }[rotation]
+    rotate_points = {
+        0: lambda X: np.c_[X[:, 1], -X[:, 0], X[:, 2]],
+        180: lambda X: np.c_[-X[:, 1], X[:, 0], X[:, 2]],
+        270: lambda X: np.c_[-X[:, 0], -X[:, 1], X[:, 2]],
+    }[rotation]
+
+    def project(points, params):
+        pixels, _ = cv2.projectPoints(points, np.zeros(3), np.zeros(3),
+                                      params['intrinsicMat'], params['distortion'])
+        return pixels.reshape(-1, 2)
+
+    # 3D points spread over the whole image, 1-5 m from the camera.
+    rng = np.random.default_rng(0)
+    u, v = rng.uniform(0, width - 1, 200), rng.uniform(0, height - 1, 200)
+    depth = rng.uniform(1, 5, 200)
+    K = upright['intrinsicMat']
+    points = np.c_[(u - K[0, 2]) / K[0, 0] * depth, (v - K[1, 2]) / K[1, 1] * depth, depth]
+
+    monkeypatch.setattr(utilsChecker, 'getVideoRotation', lambda _: rotation)
+    rotated = utilsChecker.rotateIntrinsics(copy.deepcopy(upright), 'video.mov')
+
+    expected = np.c_[pixel_map(*project(points, upright).T)]
+    np.testing.assert_allclose(project(rotate_points(points), rotated), expected, atol=1e-6)
