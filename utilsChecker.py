@@ -423,7 +423,11 @@ def rotateIntrinsics(CamParams,videoPath):
         py = originalCamParams['intrinsicMat'][1,2]
         lx = originalCamParams['imageSize'][1]
         ly = originalCamParams['imageSize'][0]
-           
+        # Tangential distortion is tied to the image axes, so it rotates too ([k1, k2, p1, p2, k3]).
+        p1 = originalCamParams['distortion'][0,2]
+        p2 = originalCamParams['distortion'][0,3]
+        # Principal point: pixel centres are at integer coordinates, so flipping an axis of length l maps x to l-1-x.
+
         if rotation == 0: # leaning left
             # Flip image size
             CamParams['imageSize'] = np.flipud(CamParams['imageSize'])
@@ -432,7 +436,9 @@ def rotateIntrinsics(CamParams,videoPath):
             CamParams['intrinsicMat'][1,1] = fx
             # Change principle point - from upper left
             CamParams['intrinsicMat'][0,2] = py
-            CamParams['intrinsicMat'][1,2] = lx-px   
+            CamParams['intrinsicMat'][1,2] = lx-1-px
+            CamParams['distortion'][0,2] = -p2
+            CamParams['distortion'][0,3] = p1
         elif rotation == 180: # leaning right
             # Flip image size
             CamParams['imageSize'] = np.flipud(CamParams['imageSize'])
@@ -440,12 +446,16 @@ def rotateIntrinsics(CamParams,videoPath):
             CamParams['intrinsicMat'][0,0] = fy
             CamParams['intrinsicMat'][1,1] = fx
             # Change principle point - from upper left
-            CamParams['intrinsicMat'][0,2] = ly-py
+            CamParams['intrinsicMat'][0,2] = ly-1-py
             CamParams['intrinsicMat'][1,2] = px
+            CamParams['distortion'][0,2] = p2
+            CamParams['distortion'][0,3] = -p1
         elif rotation == 270: # upside down
             # Change principle point - from upper left
-            CamParams['intrinsicMat'][0,2] = lx-px
-            CamParams['intrinsicMat'][1,2] = ly-py
+            CamParams['intrinsicMat'][0,2] = lx-1-px
+            CamParams['intrinsicMat'][1,2] = ly-1-py
+            CamParams['distortion'][0,2] = -p1
+            CamParams['distortion'][0,3] = -p2
             
     return CamParams
 
